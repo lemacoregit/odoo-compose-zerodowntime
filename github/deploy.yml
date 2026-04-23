@@ -7,17 +7,37 @@ on:
   workflow_dispatch:
     inputs:
       force_modules:
-        description: "Force upgrade specific modules, bypasses auto-detection (comma-separated, e.g. sale,purchase)"
+        description: "Force upgrade specific modules (comma-separated, e.g. sale,purchase)"
         required: false
         default: ""
+      action:
+        description: "Action to perform"
+        required: false
+        default: "deploy"
+        type: choice
+        options:
+          - deploy
+          - rollback
+
+# Prevent concurrent deploys — queue rather than cancel
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # JOB: detect-changes
+  # ---------------------------------------------------------------------------
   detect-changes:
-    name: 🔍 Detect Changed Modules
+    name: Detect Changed Modules
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.action != 'rollback')
     outputs:
       changed_modules: ${{ steps.detect.outputs.changed_modules }}
-      has_changes: ${{ steps.detect.outputs.has_changes }}
+      has_changes:     ${{ steps.detect.outputs.has_changes }}
 
     steps:
       - name: Checkout repository
@@ -30,9 +50,9 @@ jobs:
         run: |
           FORCE="${{ github.event.inputs.force_modules }}"
           if [ -n "$FORCE" ]; then
-            echo "⚡ Force upgrade modules: $FORCE"
+            echo "Force upgrade modules: $FORCE"
             echo "changed_modules=$FORCE" >> $GITHUB_OUTPUT
-            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "has_changes=true"       >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -41,132 +61,156 @@ jobs:
           echo "$CHANGED_FILES"
 
           MODULES=""
-          for file in $CHANGED_FILES; do
-            MODULE_DIR=$(echo "$file" | cut -d'/' -f1)
-            if [ -f "$MODULE_DIR/__manifest__.py" ]; then
-              if ! echo "$MODULES" | grep -qw "$MODULE_DIR"; then
-                MODULES="$MODULES $MODULE_DIR"
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            # Walk up from the file's directory until __manifest__.py is found
+            dir=$(dirname "$file")
+            while [ "$dir" != "." ] && [ "$dir" != "/" ]; do
+              if [ -f "$dir/__manifest__.py" ]; then
+                BASE_MODULE=$(basename "$dir")
+                if ! echo "$MODULES" | grep -qw "$BASE_MODULE"; then
+                  MODULES="$MODULES $BASE_MODULE"
+                fi
+                break
               fi
-            fi
-          done
+              dir=$(dirname "$dir")
+            done
+          done <<< "$CHANGED_FILES"
 
           MODULES=$(echo "$MODULES" | xargs)
 
           if [ -z "$MODULES" ]; then
-            echo "ℹ️ No changes detected in any Odoo module"
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "changed_modules=" >> $GITHUB_OUTPUT
+            echo "No Odoo module changes detected"
+            echo "has_changes=false"  >> $GITHUB_OUTPUT
+            echo "changed_modules="   >> $GITHUB_OUTPUT
           else
             MODULES_CSV=$(echo "$MODULES" | tr ' ' ',')
-            echo "✅ Changed modules: $MODULES_CSV"
+            echo "Changed modules: $MODULES_CSV"
             echo "changed_modules=$MODULES_CSV" >> $GITHUB_OUTPUT
-            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "has_changes=true"             >> $GITHUB_OUTPUT
           fi
 
+  # ---------------------------------------------------------------------------
+  # JOB: deploy
+  # ---------------------------------------------------------------------------
   deploy:
-    name: 🚀 Deploy to Server
+    name: Deploy to Production
     runs-on: ubuntu-latest
     needs: detect-changes
     if: needs.detect-changes.outputs.has_changes == 'true'
+    timeout-minutes: 20
+    environment: production
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup SSH key
+      - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+          chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
       - name: Pull latest code on server
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no \
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
             "cd ${{ secrets.ODOO_ADDONS_PATH }} && \
              git config core.fileMode false && \
              git fetch origin && \
              git reset --hard origin/${{ github.ref_name }}"
 
-      - name: Blue-Green Deploy
+      - name: Zero-Downtime Deploy
         run: |
-          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no \
-            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'SSHEOF'
 
-            set -e
-            cd ${{ secrets.COMPOSE_PROJECT_PATH }}
+          set -euo pipefail
+          cd ${{ secrets.COMPOSE_PROJECT_PATH }}/docker
 
-            # Determine which container is currently active
-            if docker ps --format '{{.Names}}' | grep -q "odoo18-zerodowntime-blue"; then
-              ACTIVE="blue"
-              NEXT="green"
-              NEXT_PORT=8518
-            else
-              ACTIVE="green"
-              NEXT="blue"
-              NEXT_PORT=8618
+          # Determine which slot is currently active
+          if docker ps --format '{{.Names}}' | grep -q "odoo18-zerodowntime-primary"; then
+            ACTIVE="primary"
+            ACTIVE_SERVICE="odoo-primary"
+            ACTIVE_COMPOSE="-f docker-compose.yml"
+            NEXT="standby"
+            NEXT_SERVICE="odoo-standby"
+            NEXT_COMPOSE="-f docker-compose.yml -f docker-compose.standby.yml"
+            NEXT_PORT=8118
+          else
+            ACTIVE="standby"
+            ACTIVE_SERVICE="odoo-standby"
+            ACTIVE_COMPOSE="-f docker-compose.yml -f docker-compose.standby.yml"
+            NEXT="primary"
+            NEXT_SERVICE="odoo-primary"
+            NEXT_COMPOSE="-f docker-compose.yml"
+            NEXT_PORT=8018
+          fi
+
+          echo "Active: $ACTIVE -> deploying to: $NEXT (port $NEXT_PORT)"
+
+          # Pull latest image for next slot
+          docker compose $NEXT_COMPOSE pull $NEXT_SERVICE
+
+          # Start next slot
+          docker compose $NEXT_COMPOSE up -d --force-recreate $NEXT_SERVICE
+
+          # Health check (initial 10s + 12 * 7s = up to 94s total)
+          echo "Waiting for $NEXT to pass health check..."
+          sleep 10
+          READY=false
+          for i in $(seq 1 12); do
+            HTTP=$(curl -sf --max-time 5 -o /dev/null -w "%{http_code}" \
+              "http://localhost:$NEXT_PORT/web/health" 2>/dev/null || echo "000")
+            echo "  Check $i/12 -> HTTP $HTTP"
+            if [ "$HTTP" = "200" ]; then
+              READY=true
+              echo "$NEXT is healthy"
+              break
             fi
-
-            echo "🔵 Active: $ACTIVE → deploying to $NEXT (port $NEXT_PORT)"
-
-            # Pull latest image
-            docker compose -f docker-$NEXT.yml pull odoo
-
-            # Deploy standby container
-            docker compose -f docker-$NEXT.yml up -d --force-recreate odoo
-
-            # Health check new container (max 90s)
-            echo "⏳ Waiting for $NEXT to be ready (max 90s)..."
-            sleep 10
-            READY=false
-            for i in $(seq 1 12); do
-              HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-                http://localhost:$NEXT_PORT/web/health 2>/dev/null || echo "000")
-              echo "Health check $i/12 → HTTP $HTTP"
-              if [ "$HTTP" = "200" ]; then
-                READY=true
-                echo "✅ $NEXT is ready!"
-                break
-              fi
-              sleep 7
-            done
-
-            # Abort if not ready
-            if [ "$READY" = "false" ]; then
-              echo "❌ $NEXT failed health check — aborting, keeping $ACTIVE"
-              docker compose -f docker-$NEXT.yml down
-              exit 1
-            fi
-
-            # Switch Nginx to new container
-            bash ${{ secrets.NGINX_SWITCH_SCRIPT_PATH }} $NEXT
-            echo "🔀 Nginx switched → $NEXT"
-
-            # Stop old container
-            docker compose -f docker-$ACTIVE.yml down
-            echo "🛑 $ACTIVE stopped"
-
-          EOF
-
-      - name: Wait for Odoo to be stable
-        run: |
-          echo "⏳ Waiting for Odoo to be stable after switch (max 60s)..."
-          sleep 5
-
-          for i in $(seq 1 10); do
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
-              "${{ secrets.ODOO_URL }}/web/health" 2>/dev/null || echo "000")
-            echo "Health check $i/10 → HTTP $HTTP_CODE"
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "✅ Odoo is ready!"; break
-            fi
-            if [ "$i" = "10" ]; then
-              echo "❌ Odoo not responding after Nginx switch"
-              exit 1
-            fi
-            sleep 6
+            sleep 7
           done
+
+          # Abort without switching if health check failed
+          if [ "$READY" = "false" ]; then
+            echo "ERROR: $NEXT failed health check -- aborting, $ACTIVE keeps serving traffic"
+            docker compose $NEXT_COMPOSE stop $NEXT_SERVICE
+            exit 1
+          fi
+
+          # Switch Nginx traffic to next slot
+          bash ${{ secrets.NGINX_SWITCH_SCRIPT_PATH }} "$NEXT"
+          echo "Nginx switched to $NEXT"
+
+          # Stop previous slot (database and Redis stay running)
+          docker compose $ACTIVE_COMPOSE stop "$ACTIVE_SERVICE"
+          echo "$ACTIVE stopped"
+
+          SSHEOF
+
+      - name: Verify public endpoint after switch
+        run: |
+          echo "Verifying public endpoint (max 60s)..."
+          sleep 5
+          for i in $(seq 1 10); do
+            HTTP=$(curl -sf --max-time 5 -o /dev/null -w "%{http_code}" \
+              "${{ secrets.ODOO_URL }}/web/health" 2>/dev/null || echo "000")
+            echo "  Check $i/10 -> HTTP $HTTP"
+            if [ "$HTTP" = "200" ]; then
+              echo "Odoo is healthy after switch"
+              exit 0
+            fi
+            [ "$i" -lt 10 ] && sleep 6
+          done
+          echo "ERROR: Odoo not responding after Nginx switch"
+          exit 1
 
       - name: Upgrade changed modules via XML-RPC
         env:
@@ -175,17 +219,107 @@ jobs:
           ODOO_ADMIN_USER:     ${{ secrets.ODOO_ADMIN_USER }}
           ODOO_ADMIN_PASSWORD: ${{ secrets.ODOO_ADMIN_PASSWORD }}
         run: |
-          python3 ${{ secrets.UPGRADE_SCRIPT_PATH }} \
+          python3 github/script/upgrade_modules.py \
             --modules "${{ needs.detect-changes.outputs.changed_modules }}"
 
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+
+  # ---------------------------------------------------------------------------
+  # JOB: rollback (manual trigger only)
+  # ---------------------------------------------------------------------------
+  rollback:
+    name: Manual Rollback
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.action == 'rollback'
+    timeout-minutes: 10
+    environment: production
+
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Rollback to previous slot
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'SSHEOF'
+
+          set -euo pipefail
+          cd ${{ secrets.COMPOSE_PROJECT_PATH }}/docker
+
+          # Determine current active slot from Nginx symlink
+          ACTIVE_LINK=$(readlink /etc/nginx/sites-enabled/odoo18-zerodowntime || echo "unknown")
+          echo "Current Nginx symlink: $ACTIVE_LINK"
+
+          if echo "$ACTIVE_LINK" | grep -q "primary"; then
+            ROLLBACK_TO="standby"
+            ROLLBACK_SERVICE="odoo-standby"
+            ROLLBACK_COMPOSE="-f docker-compose.yml -f docker-compose.standby.yml"
+            ROLLBACK_PORT=8118
+          else
+            ROLLBACK_TO="primary"
+            ROLLBACK_SERVICE="odoo-primary"
+            ROLLBACK_COMPOSE="-f docker-compose.yml"
+            ROLLBACK_PORT=8018
+          fi
+
+          echo "Rolling back to: $ROLLBACK_TO (port $ROLLBACK_PORT)"
+
+          # Start previous slot if not already running
+          docker compose $ROLLBACK_COMPOSE up -d $ROLLBACK_SERVICE
+
+          # Wait for it to be healthy (max 60s)
+          echo "Waiting for $ROLLBACK_TO to be healthy..."
+          sleep 15
+          READY=false
+          for i in $(seq 1 6); do
+            HTTP=$(curl -sf --max-time 5 -o /dev/null -w "%{http_code}" \
+              "http://localhost:$ROLLBACK_PORT/web/health" 2>/dev/null || echo "000")
+            echo "  Check $i/6 -> HTTP $HTTP"
+            if [ "$HTTP" = "200" ]; then
+              READY=true
+              break
+            fi
+            sleep 8
+          done
+
+          if [ "$READY" = "false" ]; then
+            echo "ERROR: rollback target $ROLLBACK_TO is not healthy -- cannot switch"
+            exit 1
+          fi
+
+          bash ${{ secrets.NGINX_SWITCH_SCRIPT_PATH }} "$ROLLBACK_TO"
+          echo "Rollback complete: traffic now on $ROLLBACK_TO"
+
+          SSHEOF
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
+
+  # ---------------------------------------------------------------------------
+  # JOB: notify
+  # ---------------------------------------------------------------------------
   notify:
-    name: 📢 Send Email Notification
+    name: Send Deployment Notification
     runs-on: ubuntu-latest
     needs: [detect-changes, deploy]
     if: always() && needs.detect-changes.outputs.has_changes == 'true'
+    timeout-minutes: 5
 
     steps:
-      - name: Send Email notification
+      - name: Send email notification
         env:
           EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
           SMTP_SERVER:      ${{ secrets.SMTP_SERVER }}
@@ -208,21 +342,22 @@ jobs:
 
           recipients_raw = os.environ.get("EMAIL_RECIPIENTS", "")
           if not recipients_raw.strip():
-              print("⚠️ EMAIL_RECIPIENTS is empty, skipping"); exit(0)
+              print("EMAIL_RECIPIENTS is empty, skipping")
+              exit(0)
 
-          recipients  = [r.strip() for r in recipients_raw.split(",") if r.strip()]
-          smtp_server = os.environ["SMTP_SERVER"]
-          smtp_port   = int(os.environ.get("SMTP_PORT", "587"))
-          smtp_user   = os.environ["SMTP_USER"]
-          smtp_pass   = os.environ["SMTP_PASSWORD"]
-          email_from      = os.environ["EMAIL_FROM"]
-          _, email_from_addr = parseaddr(email_from)
-          status      = os.environ["DEPLOY_STATUS"]
-          color       = "#36a64f" if status == "success" else "#d9534f"
-          emoji       = "✅" if status == "success" else "❌"
-          status_txt  = "SUCCESS" if status == "success" else "FAILED"
-          short_commit = os.environ["SHORT_COMMIT"][:7]
-          subject     = f"{emoji} [Odoo Deploy] {status_txt} — {os.environ['BRANCH']} ({short_commit})"
+          recipients       = [r.strip() for r in recipients_raw.split(",") if r.strip()]
+          smtp_server      = os.environ["SMTP_SERVER"]
+          smtp_port        = int(os.environ.get("SMTP_PORT", "587"))
+          smtp_user        = os.environ["SMTP_USER"]
+          smtp_pass        = os.environ["SMTP_PASSWORD"]
+          email_from       = os.environ["EMAIL_FROM"]
+          _, from_addr     = parseaddr(email_from)
+          status           = os.environ["DEPLOY_STATUS"]
+          color            = "#36a64f" if status == "success" else "#d9534f"
+          emoji            = "✅" if status == "success" else "❌"
+          status_txt       = "SUCCESS" if status == "success" else "FAILED"
+          short_commit     = os.environ["SHORT_COMMIT"][:7]
+          subject          = f"{emoji} [Odoo Deploy] {status_txt} — {os.environ['BRANCH']} ({short_commit})"
 
           html = f"""
           <html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
@@ -239,7 +374,7 @@ jobs:
               </table>
               <div style="margin-top:24px;text-align:center;">
                 <a href="{os.environ['RUN_URL']}" style="background:{color};color:#fff;padding:10px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">
-                  🔗 View Workflow Details
+                  View Workflow Details
                 </a>
               </div>
             </div>
@@ -258,28 +393,29 @@ jobs:
               return msg
 
           for recipient in recipients:
-              msg = build_msg(recipient)
               try:
+                  msg = build_msg(recipient)
                   if smtp_port == 465:
                       with smtplib.SMTP_SSL(smtp_server, smtp_port) as s:
                           s.login(smtp_user, smtp_pass)
-                          s.sendmail(email_from_addr, recipient, msg.as_string())
+                          s.sendmail(from_addr, recipient, msg.as_string())
                   else:
                       with smtplib.SMTP(smtp_server, smtp_port) as s:
-                          s.ehlo()
-                          s.starttls()
-                          s.ehlo()
+                          s.ehlo(); s.starttls(); s.ehlo()
                           s.login(smtp_user, smtp_pass)
-                          s.sendmail(email_from_addr, recipient, msg.as_string())
-                  print(f"✅ Email sent → {recipient}")
+                          s.sendmail(from_addr, recipient, msg.as_string())
+                  print(f"Email sent -> {recipient}")
               except Exception as e:
-                  print(f"❌ Failed to send → {recipient}: {e}")
+                  print(f"Failed to send -> {recipient}: {e}")
           PYEOF
 
+  # ---------------------------------------------------------------------------
+  # JOB: no-changes
+  # ---------------------------------------------------------------------------
   no-changes:
-    name: ℹ️ No Module Changes Detected
+    name: No Module Changes
     runs-on: ubuntu-latest
     needs: detect-changes
     if: needs.detect-changes.outputs.has_changes == 'false'
     steps:
-      - run: echo "ℹ️ No Odoo module changes detected, deployment skipped."
+      - run: echo "No Odoo module changes detected — deployment skipped."
