@@ -163,13 +163,14 @@ cython_debug/
 .vscode/
 
 odoo-postgres/
-odoo-redis/
 
 etc/addons/
 etc/filestore/
-etc/config/
 etc/sessions/
+etc/logs/
 
-odoo/logs/
+addons/default/
+
+docker-compose.override.yml
 
 .env

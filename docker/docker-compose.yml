@@ -1,0 +1,165 @@
+version: '3.8'
+
+# Shared Odoo service definition — merged into odoo-primary via YAML anchor
+x-odoo-base: &odoo-base
+  image: odoo:18.0
+  user: root
+  restart: always
+  volumes:
+    - ./entrypoint.sh:/entrypoint.sh
+    - ./etc/conf/odoo.conf:/etc/odoo/odoo.conf
+    - ./etc/logs:/etc/odoo/logs
+    - ./etc/addons:/etc/odoo/addons
+    - ./etc/filestore:/etc/odoo/filestore
+    - ./etc/sessions:/etc/odoo/sessions
+    - ./etc/requirements.txt:/etc/odoo/requirements.txt
+    - ./addons/custom:/mnt/custom-addons
+    - ./addons/extra:/mnt/extra-addons
+    - ./addons/default:/mnt/default-addons
+  environment: &odoo-env
+    HOST: db
+    USER: '${POSTGRES_USER}'
+    PASSWORD: '${POSTGRES_PASSWORD}'
+    ODOO_SESSION_REDIS: '${ODOO_SESSION_REDIS}'
+    ODOO_SESSION_REDIS_HOST: '${ODOO_SESSION_REDIS_HOST}'
+    ODOO_SESSION_REDIS_PORT: '${ODOO_SESSION_REDIS_PORT}'
+    ODOO_SESSION_REDIS_PASSWORD: '${ODOO_SESSION_REDIS_PASSWORD}'
+    ODOO_SESSION_REDIS_SSL: '${ODOO_SESSION_REDIS_SSL}'
+    ODOO_SESSION_REDIS_SSL_CERT_REQS: '${ODOO_SESSION_REDIS_SSL_CERT_REQS}'
+    ODOO_SESSION_REDIS_CLUSTER: '${ODOO_SESSION_REDIS_CLUSTER}'
+    ODOO_SESSION_REDIS_URL: '${ODOO_SESSION_REDIS_URL}'
+    ODOO_SESSION_REDIS_PREFIX: '${ODOO_SESSION_REDIS_PREFIX}'
+    ODOO_SESSION_REDIS_EXPIRATION: '${ODOO_SESSION_REDIS_EXPIRATION}'
+    ODOO_SESSION_REDIS_EXPIRATION_ANONYMOUS: '${ODOO_SESSION_REDIS_EXPIRATION_ANONYMOUS}'
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "50m"
+      max-file: "5"
+      tag: "{{.Name}}"
+
+networks:
+  odoo-network:
+    name: odoo18-zerodowntime-network
+    driver: bridge
+
+services:
+
+  db:
+    image: postgres:16
+    container_name: odoo18-zerodowntime-postgres
+    networks:
+      - odoo-network
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    shm_size: '256mb'
+    environment:
+      POSTGRES_USER: '${POSTGRES_USER}'
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
+      POSTGRES_DB: '${POSTGRES_DB}'
+      PGDATA: /var/lib/postgresql/data
+    # Tuning for a 4-8GB RAM production server — adjust shared_buffers to ~25% of total RAM
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "effective_cache_size=768MB"
+      - "-c"
+      - "maintenance_work_mem=64MB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "work_mem=32MB"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "log_min_duration_statement=1000"
+      - "-c"
+      - "idle_in_transaction_session_timeout=30000"
+    volumes:
+      - ./odoo-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '2.0'
+        reservations:
+          memory: 256m
+    restart: always
+
+  redis:
+    image: redis:8.2.5
+    container_name: odoo18-zerodowntime-redis
+    networks:
+      - odoo-network
+    ports:
+      - "${REDIS_EXTERNAL_PORT}:6379"
+    # Config file handles all settings; password injected separately to avoid storing in file
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf
+      --requirepass ${ODOO_SESSION_REDIS_PASSWORD}
+    volumes:
+      - ./etc/conf/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${ODOO_SESSION_REDIS_PASSWORD}", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1.0'
+        reservations:
+          memory: 64m
+    restart: always
+
+  odoo-primary:
+    <<: *odoo-base
+    container_name: odoo18-zerodowntime-primary
+    networks:
+      - odoo-network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${ODOO_PRIMARY_HTTP_PORT}:8069"
+      - "${ODOO_PRIMARY_LONGPOLLING_PORT}:8072"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8069/web/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+          cpus: '4.0'
+        reservations:
+          memory: 512m
+          cpus: '0.5'

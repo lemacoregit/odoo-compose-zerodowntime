@@ -1,0 +1,80 @@
+version: '3.8'
+
+# Standby Odoo instance — joins the network created by docker-compose.yml.
+# Always used together with the primary compose file:
+#   docker compose -f docker-compose.yml -f docker-compose.standby.yml <command> [odoo-standby]
+
+networks:
+  odoo-network:
+    external: true
+    name: odoo18-zerodowntime-network
+
+services:
+
+  # Waits for PostgreSQL to accept connections before starting odoo-standby
+  odoo-standby-db-check:
+    image: busybox
+    container_name: odoo18-zerodowntime-standby-db-checker
+    networks:
+      - odoo-network
+    command: sh -c "until nc -z db 5432; do echo waiting for db; sleep 2; done"
+    restart: "no"
+
+  odoo-standby:
+    image: odoo:18.0
+    user: root
+    container_name: odoo18-zerodowntime-standby
+    networks:
+      - odoo-network
+    depends_on:
+      - odoo-standby-db-check
+    ports:
+      - "${ODOO_STANDBY_HTTP_PORT}:8069"
+      - "${ODOO_STANDBY_LONGPOLLING_PORT}:8072"
+    environment:
+      HOST: db
+      USER: '${POSTGRES_USER}'
+      PASSWORD: '${POSTGRES_PASSWORD}'
+      ODOO_SESSION_REDIS: '${ODOO_SESSION_REDIS}'
+      ODOO_SESSION_REDIS_HOST: '${ODOO_SESSION_REDIS_HOST}'
+      ODOO_SESSION_REDIS_PORT: '${ODOO_SESSION_REDIS_PORT}'
+      ODOO_SESSION_REDIS_PASSWORD: '${ODOO_SESSION_REDIS_PASSWORD}'
+      ODOO_SESSION_REDIS_SSL: '${ODOO_SESSION_REDIS_SSL}'
+      ODOO_SESSION_REDIS_SSL_CERT_REQS: '${ODOO_SESSION_REDIS_SSL_CERT_REQS}'
+      ODOO_SESSION_REDIS_CLUSTER: '${ODOO_SESSION_REDIS_CLUSTER}'
+      ODOO_SESSION_REDIS_URL: '${ODOO_SESSION_REDIS_URL}'
+      ODOO_SESSION_REDIS_PREFIX: '${ODOO_SESSION_REDIS_PREFIX}'
+      ODOO_SESSION_REDIS_EXPIRATION: '${ODOO_SESSION_REDIS_EXPIRATION}'
+      ODOO_SESSION_REDIS_EXPIRATION_ANONYMOUS: '${ODOO_SESSION_REDIS_EXPIRATION_ANONYMOUS}'
+    volumes:
+      - ./entrypoint.sh:/entrypoint.sh
+      - ./etc/conf/odoo.conf:/etc/odoo/odoo.conf
+      - ./etc/logs:/etc/odoo/logs
+      - ./etc/addons:/etc/odoo/addons
+      - ./etc/filestore:/etc/odoo/filestore
+      - ./etc/sessions:/etc/odoo/sessions
+      - ./etc/requirements.txt:/etc/odoo/requirements.txt
+      - ./addons/custom:/mnt/custom-addons
+      - ./addons/extra:/mnt/extra-addons
+      - ./addons/default:/mnt/default-addons
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8069/web/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 6
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+        tag: "{{.Name}}"
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+          cpus: '4.0'
+        reservations:
+          memory: 512m
+          cpus: '0.5'
+    restart: always
