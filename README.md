@@ -161,17 +161,17 @@ nginx -v
 
 ```bash
 # Clone the docker compose project
-sudo mkdir -p /opt/lemacore
-sudo chown $USER:$USER /opt/lemacore
-git clone https://github.com/your-org/docker-compose /opt/lemacore
-cd /opt/lemacore
+sudo mkdir -p /opt/zerodowntime
+sudo chown $USER:$USER /opt/zerodowntime
+git clone https://github.com/your-org/docker-compose /opt/zerodowntime
+cd /opt/zerodowntime
 
 # Clone your custom addons repo inside the project
-git clone https://github.com/your-org/mazuta-addons odoo/mazuta-custom-addons
+git clone https://github.com/your-org/zerodowntime-addons odoo/zerodowntime-custom-addons
 
 # Create required directories (git-ignored)
 mkdir -p odoo/logs
-mkdir -p odoo/mazuta-extra-addons
+mkdir -p odoo/zerodowntime-extra-addons
 mkdir -p odoo/default-addons
 mkdir -p odoo-web/addons odoo-web/filestore odoo-web/sessions
 mkdir -p odoo-postgres
@@ -183,7 +183,7 @@ mkdir -p odoo-redis/data odoo-redis/conf
 ### Step 3 — Configure Environment
 
 ```bash
-cd /opt/lemacore
+cd /opt/zerodowntime
 
 # Copy env template
 cp .env.example .env
@@ -209,21 +209,21 @@ Everything else can stay as the defaults in `.env.example`.
 
 ### Step 4 — Start Docker Containers
 
-Always start **Green first** — it owns the network, database, and Redis.
+The primary compose file owns the network, database, and Redis. Start it first.
 
 ```bash
-cd /opt/lemacore
+cd /opt/zerodowntime
 
-# Start green (db + redis + odoo-green)
-docker compose -f docker-green.yml up -d
+# Start infra + primary odoo
+docker compose up -d
 
 # Verify all containers are running
-docker ps --filter name=odoo18-mazuta
+docker ps --filter name=odoo18-zerodowntime
 
 # Expected output:
-# odoo18-mazuta-green     → Up
-# odoo18-mazuta-postgres  → Up
-# odoo18-mazuta-redis     → Up
+# odoo18-zerodowntime-primary   → Up
+# odoo18-zerodowntime-postgres  → Up
+# odoo18-zerodowntime-redis     → Up
 ```
 
 Wait ~30 seconds for Odoo to initialize, then test locally:
@@ -239,8 +239,8 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:8118/web/health
 
 ```bash
 # Run the one-time setup script
-cd /opt/lemacore
-sudo bash nginx-bluegreen/setup.sh
+cd /opt/zerodowntime
+sudo bash nginx/setup.sh
 ```
 
 This will:
@@ -262,11 +262,11 @@ ls -la /etc/nginx/sites-enabled/odoo
 
 ### Step 6 — Issue SSL Certificate
 
-Make sure your domain (`erp.lemacore.com`) already points to the server IP via DNS before running this:
+Make sure your domain (`erp.zerodowntime.com`) already points to the server IP via DNS before running this:
 
 ```bash
 # Issue certificate — Certbot will auto-configure Nginx
-sudo certbot --nginx -d erp.lemacore.com
+sudo certbot --nginx -d erp.zerodowntime.com
 
 # Verify auto-renewal works
 sudo certbot renew --dry-run
@@ -275,7 +275,7 @@ sudo certbot renew --dry-run
 After Certbot runs, test HTTPS:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" https://erp.lemacore.com/web/health
+curl -s -o /dev/null -w "%{http_code}" https://erp.zerodowntime.com/web/health
 # Expected: 200
 ```
 
@@ -287,18 +287,18 @@ The CI/CD pipeline calls `switch.sh` and `upgrade_modules.py` on the server via 
 
 ```bash
 # switch.sh is already part of the docker compose project
-ls /opt/lemacore/nginx-bluegreen/switch.sh
+ls /opt/zerodowntime/nginx/switch.sh
 
 # upgrade_modules.py — copy to the project root or a path of your choice
-cp /path/to/upgrade_modules.py /opt/lemacore/upgrade_modules.py
+cp /path/to/upgrade_modules.py /opt/zerodowntime/upgrade_modules.py
 
 # Verify switch.sh is executable
-chmod +x /opt/lemacore/nginx-bluegreen/switch.sh
+chmod +x /opt/zerodowntime/nginx/switch.sh
 
 # Test switch manually
-sudo bash /opt/lemacore/nginx-bluegreen/switch.sh green
+sudo bash /opt/zerodowntime/nginx/switch.sh green
 # Then switch back
-sudo bash /opt/lemacore/nginx-bluegreen/switch.sh blue
+sudo bash /opt/zerodowntime/nginx/switch.sh blue
 ```
 
 Also verify the SSH user has permission to run `nginx -s reload` without a password prompt (required for GitHub Actions):
@@ -329,16 +329,16 @@ Add all of the following:
 
 | Secret | Value |
 |---|---|
-| `ODOO_ADDONS_PATH` | `/opt/lemacore/odoo/mazuta-custom-addons` |
-| `COMPOSE_PROJECT_PATH` | `/opt/lemacore` |
-| `NGINX_SWITCH_SCRIPT_PATH` | `/opt/lemacore/nginx-bluegreen/switch.sh` |
-| `UPGRADE_SCRIPT_PATH` | `/opt/lemacore/upgrade_modules.py` |
+| `ODOO_ADDONS_PATH` | `/opt/zerodowntime/odoo/zerodowntime-custom-addons` |
+| `COMPOSE_PROJECT_PATH` | `/opt/zerodowntime` |
+| `NGINX_SWITCH_SCRIPT_PATH` | `/opt/zerodowntime/nginx/switch.sh` |
+| `UPGRADE_SCRIPT_PATH` | `/opt/zerodowntime/upgrade_modules.py` |
 
 **Odoo Connection:**
 
 | Secret | Value |
 |---|---|
-| `ODOO_URL` | `https://erp.lemacore.com` |
+| `ODOO_URL` | `https://erp.zerodowntime.com` |
 | `ODOO_DB` | `odoo` |
 | `ODOO_ADMIN_USER` | `admin` |
 | `ODOO_ADMIN_PASSWORD` | Your Odoo admin password |
@@ -347,12 +347,12 @@ Add all of the following:
 
 | Secret | Value |
 |---|---|
-| `EMAIL_RECIPIENTS` | `dev@lemacore.com,ops@lemacore.com` |
+| `EMAIL_RECIPIENTS` | `dev@zerodowntime.com,ops@zerodowntime.com` |
 | `SMTP_SERVER` | `smtp.gmail.com` |
 | `SMTP_PORT` | `587` |
-| `SMTP_USER` | `noreply@lemacore.com` |
+| `SMTP_USER` | `noreply@zerodowntime.com` |
 | `SMTP_PASSWORD` | Gmail App Password |
-| `EMAIL_FROM` | `Odoo CI/CD <noreply@lemacore.com>` |
+| `EMAIL_FROM` | `Odoo CI/CD <noreply@zerodowntime.com>` |
 
 ---
 
@@ -361,7 +361,7 @@ Add all of the following:
 Push a small change to the `18.0` branch to trigger the pipeline:
 
 ```bash
-# In your custom addons repo (mazuta-custom-addons)
+# In your custom addons repo (zerodowntime-custom-addons)
 git checkout 18.0
 echo "# trigger deploy" >> README.md
 git add README.md
@@ -385,20 +385,20 @@ After a successful first deployment:
 
 ```bash
 # Check active container (should have switched to blue after first deploy)
-docker ps --filter name=odoo18-mazuta
+docker ps --filter name=odoo18-zerodowntime
 
 # Check active Nginx config
 ls -la /etc/nginx/sites-enabled/odoo
 
 # Test public URL
-curl -s -o /dev/null -w "%{http_code}" https://erp.lemacore.com/web/health
+curl -s -o /dev/null -w "%{http_code}" https://erp.zerodowntime.com/web/health
 # Expected: 200
 
 # Check Nginx logs
 sudo tail -20 /var/log/nginx/odoo-blue.access.log
 
 # Check Odoo logs
-docker logs --tail 50 odoo18-mazuta-blue
+docker logs --tail 50 odoo18-zerodowntime-blue
 ```
 
 ---
@@ -424,19 +424,19 @@ docker logs --tail 50 odoo18-mazuta-blue
 
 ```bash
 # Check logs
-docker logs odoo18-mazuta-green
-docker logs odoo18-mazuta-postgres
+docker logs odoo18-zerodowntime-green
+docker logs odoo18-zerodowntime-postgres
 
 # Check env file is present
-cat /opt/lemacore/.env
+cat /opt/zerodowntime/.env
 ```
 
-**Blue container fails — network not found**
+**Standby container fails — network not found**
 
-Blue requires green's network to exist. Start green first:
+Standby requires the network created by the primary compose. Start primary first:
 ```bash
-docker compose -f docker-green.yml up -d
-docker compose -f docker-blue.yml up -d
+docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.standby.yml up -d odoo-standby
 ```
 
 **Nginx returns 502 Bad Gateway**
@@ -447,18 +447,18 @@ The active container may not be running. Check and switch manually:
 ls -la /etc/nginx/sites-enabled/odoo
 
 # Check containers
-docker ps | grep mazuta
+docker ps | grep zerodowntime
 
 # Switch to the running one
-sudo bash /opt/lemacore/nginx-bluegreen/switch.sh green
+sudo bash /opt/zerodowntime/nginx/switch.sh green
 ```
 
 **Health check fails during deploy**
 
 The pipeline aborts and keeps the active container running. Investigate the new container:
 ```bash
-docker logs odoo18-mazuta-blue   # or green
-docker logs odoo18-mazuta-blue-db-checker
+docker logs odoo18-zerodowntime-blue   # or green
+docker logs odoo18-zerodowntime-blue-db-checker
 ```
 
 **GitHub Actions SSH fails**
@@ -476,8 +476,8 @@ head -1 your_key.pem
 
 Test manually from server or local:
 ```bash
-python3 /opt/lemacore/upgrade_modules.py \
-  --url https://erp.lemacore.com \
+python3 /opt/zerodowntime/upgrade_modules.py \
+  --url https://erp.zerodowntime.com \
   --db odoo \
   --user admin \
   --password your_password \

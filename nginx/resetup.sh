@@ -1,44 +1,110 @@
-#!/bin/bash
-# Re-setup script — safe to run multiple times.
-# Cleans up stale symlinks and duplicate configs before re-applying setup.
+#!/usr/bin/env bash
+# Re-run Nginx config setup — safe to run multiple times.
+# Use this to refresh config files after editing them in the repo,
+# or to recover from a broken Nginx state.
+#
+# Does NOT request a new SSL certificate (certbot is skipped if cert exists).
+# Usage: sudo bash nginx/resetup.sh
 
-set -e
+set -euo pipefail
 
-DOMAIN="zerodowntime.lemacore.com"
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
 SITES_AVAILABLE="/etc/nginx/sites-available"
 SITES_ENABLED="/etc/nginx/sites-enabled"
+SYMLINK_NAME="odoo18-zerodowntime"
 
-# Always attempt to start Nginx on exit, even if the script fails midway.
-trap 'echo "⚠️  Script exited — ensuring Nginx is running..."; sudo systemctl start nginx 2>/dev/null || true' ERR
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "🧹 Cleaning up stale symlinks in sites-enabled..."
-sudo rm -f \
-  $SITES_ENABLED/default \
-  $SITES_ENABLED/odoo \
-  $SITES_ENABLED/odoo18-compose-blue \
-  $SITES_ENABLED/odoo18-compose-green \
-  $SITES_ENABLED/odoo18-zerodowntime
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-echo "📂 Copying config files..."
-sudo cp sites-available/odoo18-compose-blue  $SITES_AVAILABLE/odoo18-compose-blue
-sudo cp sites-available/odoo18-compose-green $SITES_AVAILABLE/odoo18-compose-green
+info()    { echo "[INFO]  $*"; }
+success() { echo "[OK]    $*"; }
+die()     { echo "[ERROR] $*" >&2; exit 1; }
 
-echo "🔗 Activating green as default..."
-sudo ln -sf $SITES_AVAILABLE/odoo18-compose-green $SITES_ENABLED/odoo18-zerodowntime
+require_root() {
+    [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "This script must be run as root (sudo bash resetup.sh)"
+}
 
-echo "🧪 Testing Nginx config..."
-sudo nginx -t
+# ---------------------------------------------------------------------------
+# Trap — ensure Nginx is running on any failure
+# ---------------------------------------------------------------------------
+
+trap 'echo; echo "[WARN]  Script exited — ensuring Nginx is running..."; systemctl start nginx 2>/dev/null || true' ERR
+
+# ---------------------------------------------------------------------------
+# Preflight
+# ---------------------------------------------------------------------------
+
+require_root
+
+[[ -f "${SCRIPT_DIR}/sites-available/odoo18-compose-primary" ]]  || die "Missing: nginx/sites-available/odoo18-compose-primary"
+[[ -f "${SCRIPT_DIR}/sites-available/odoo18-compose-standby" ]] || die "Missing: nginx/sites-available/odoo18-compose-standby"
+
+# ---------------------------------------------------------------------------
+# Step 1: Clean up all known stale symlinks
+# ---------------------------------------------------------------------------
+
+info "Removing stale symlinks from ${SITES_ENABLED}..."
+for link in \
+    default \
+    odoo \
+    "${SYMLINK_NAME}" \
+    odoo18-compose-primary \
+    odoo18-compose-standby \
+    odoo18-compose-blue \
+    odoo18-compose-green; do
+    rm -f "${SITES_ENABLED}/${link}"
+done
+success "Stale symlinks removed."
+
+# ---------------------------------------------------------------------------
+# Step 2: Refresh config files from repo
+# ---------------------------------------------------------------------------
+
+info "Copying updated config files..."
+cp "${SCRIPT_DIR}/sites-available/odoo18-compose-primary"  "${SITES_AVAILABLE}/odoo18-compose-primary"
+cp "${SCRIPT_DIR}/sites-available/odoo18-compose-standby" "${SITES_AVAILABLE}/odoo18-compose-standby"
+success "Config files updated."
+
+# ---------------------------------------------------------------------------
+# Step 3: Activate primary as default
+# ---------------------------------------------------------------------------
+
+info "Activating primary as default slot..."
+ln -sf "${SITES_AVAILABLE}/odoo18-compose-primary" "${SITES_ENABLED}/${SYMLINK_NAME}"
+success "Symlink: ${SITES_ENABLED}/${SYMLINK_NAME} -> odoo18-compose-primary"
+
+# ---------------------------------------------------------------------------
+# Step 4: Validate and reload/start Nginx
+# ---------------------------------------------------------------------------
+
+info "Validating Nginx config..."
+nginx -t
 
 if systemctl is-active --quiet nginx; then
-  echo "🔄 Reloading Nginx..."
-  sudo nginx -s reload
+    info "Reloading Nginx..."
+    nginx -s reload
+    success "Nginx reloaded."
 else
-  echo "🚀 Starting Nginx..."
-  sudo systemctl start nginx
+    info "Starting Nginx..."
+    systemctl start nginx
+    success "Nginx started."
 fi
 
-echo "✅ Done! Active: BLUE (port 8518)"
-echo ""
-echo "To switch manually:"
-echo "  → Green: sudo bash $(dirname "$0")/switch.sh green"
-echo "  → Blue:  sudo bash $(dirname "$0")/switch.sh blue"
+# ---------------------------------------------------------------------------
+# Done
+# ---------------------------------------------------------------------------
+
+echo
+success "Re-setup complete!"
+echo
+echo "  Active slot : PRIMARY (port 8018)"
+echo "  Symlink     : ${SITES_ENABLED}/${SYMLINK_NAME}"
+echo
+echo "  Switch to standby : sudo bash ${SCRIPT_DIR}/switch.sh standby"
+echo "  Switch to primary : sudo bash ${SCRIPT_DIR}/switch.sh primary"

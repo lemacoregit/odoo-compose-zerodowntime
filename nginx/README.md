@@ -1,6 +1,6 @@
-# Nginx Blue-Green Configuration
+# Nginx Configuration
 
-> Nginx reverse proxy setup for Odoo 18 Blue-Green deployment with zero-downtime traffic switching via symlinks.
+> Nginx reverse proxy for Odoo 18 zero-downtime deployment. Traffic switching between primary and standby slots via symlink + reload — zero dropped connections.
 
 ---
 
@@ -10,20 +10,21 @@
 - [How Traffic Switching Works](#how-traffic-switching-works)
 - [Port Mapping](#port-mapping)
 - [File Structure](#file-structure)
-- [Config Files](#config-files)
-  - [odoo18-compose-blue](#odoo18-compose-blue)
-  - [odoo18-compose-green](#odoo18-compose-green)
+- [Nginx Config Features](#nginx-config-features)
 - [Scripts](#scripts)
   - [setup.sh](#setupsh)
   - [switch.sh](#switchsh)
+  - [resetup.sh](#resetupsh)
+  - [shutdown.sh](#shutdownsh)
 - [SSL Certificate](#ssl-certificate)
+- [Sudoers Setup](#sudoers-setup)
 - [Commands Reference](#commands-reference)
 
 ---
 
 ## Overview
 
-Nginx acts as the reverse proxy in front of the Blue-Green Odoo containers. Traffic switching between blue and green is done by updating a **symlink** in `sites-enabled/` and reloading Nginx — no downtime, no port changes for end users.
+Nginx sits in front of the two Odoo containers (primary and standby). Only one is receiving traffic at any given time. The active config is determined by a single symlink in `sites-enabled/`.
 
 ```
 User Browser
@@ -31,146 +32,112 @@ User Browser
      ▼
   Nginx
      │
-     │ sites-enabled/odoo18-zerodowntime  (symlink)
-     │         │
-     │    points to either:
-     │         │
-     ├── odoo18-compose-blue  → proxy_pass 127.0.0.1:8518
-     └── odoo18-compose-green → proxy_pass 127.0.0.1:8618
+     │ /etc/nginx/sites-enabled/odoo18-zerodowntime  (symlink)
+     │
+     ├── → odoo18-compose-primary  (port 8018/8027)
+     └── → odoo18-compose-standby  (port 8118/8127)
 ```
+
+Switching traffic = update symlink + `nginx -s reload`. The reload is graceful — active connections are not dropped.
 
 ---
 
 ## How Traffic Switching Works
 
-Nginx reads its active config from `sites-enabled/odoo18-zerodowntime`, which is a symlink:
-
 ```bash
-# When blue is active:
-/etc/nginx/sites-enabled/odoo18-zerodowntime → /etc/nginx/sites-available/odoo18-compose-blue
+# Primary is active (default after setup)
+/etc/nginx/sites-enabled/odoo18-zerodowntime -> /etc/nginx/sites-available/odoo18-compose-primary
 
-# When green is active:
-/etc/nginx/sites-enabled/odoo18-zerodowntime → /etc/nginx/sites-available/odoo18-compose-green
+# Standby is active (after first deploy)
+/etc/nginx/sites-enabled/odoo18-zerodowntime -> /etc/nginx/sites-available/odoo18-compose-standby
 ```
 
-To switch, update the symlink and reload Nginx:
+The `switch.sh` script handles this atomically:
 
 ```bash
-# Switch to green
-sudo ln -sf /etc/nginx/sites-available/odoo18-compose-green /etc/nginx/sites-enabled/odoo18-zerodowntime
-sudo nginx -s reload
-
-# Switch to blue
-sudo ln -sf /etc/nginx/sites-available/odoo18-compose-blue /etc/nginx/sites-enabled/odoo18-zerodowntime
-sudo nginx -s reload
+ln -sf /etc/nginx/sites-available/odoo18-compose-standby \
+       /etc/nginx/sites-enabled/odoo18-zerodowntime
+nginx -t && nginx -s reload
 ```
-
-`nginx -s reload` applies the new config gracefully — active connections are not dropped.
 
 ---
 
 ## Port Mapping
 
-| Environment | Odoo Web (host) | Longpolling (host) | Container Web | Container Longpoll |
+| Slot | Web (host) | Longpolling (host) | Container web | Container longpoll |
 |---|---|---|---|---|
-| Blue | `8518` | `8572` | `8069` | `8072` |
-| Green | `8618` | `8672` | `8069` | `8072` |
+| Primary | `8018` | `8027` | `8069` | `8072` |
+| Standby | `8118` | `8127` | `8069` | `8072` |
 
-Nginx proxies to the **host port**. The containers internally always use `8069` (web) and `8072` (longpolling), mapped to different host ports to avoid conflicts when both are running simultaneously.
+Nginx proxies to the **host port**. Both containers run simultaneously on different host ports; only one is behind Nginx at a time.
 
 ---
 
 ## File Structure
 
 ```
+nginx/
+├── sites-available/
+│   ├── odoo18-compose-primary   ← Nginx config for primary slot (8018/8027)
+│   └── odoo18-compose-standby  ← Nginx config for standby slot (8118/8127)
+├── setup.sh                    ← One-time setup (certbot + install configs)
+├── switch.sh                   ← Switch active slot (primary ↔ standby)
+├── resetup.sh                  ← Re-apply configs without certbot
+└── shutdown.sh                 ← Remove all Odoo Nginx configs
+
 /etc/nginx/
 ├── sites-available/
-│   ├── odoo18-compose-blue               ← Proxy config for blue (port 8518/8572)
-│   └── odoo18-compose-green              ← Proxy config for green (port 8618/8672)
+│   ├── odoo18-compose-primary  ← Installed by setup.sh
+│   └── odoo18-compose-standby
 └── sites-enabled/
-    └── odoo                    ← Symlink to active config (blue or green)
-
-/opt/lemacore/nginx-bluegreen/
-├── sites-available/
-│   ├── odoo18-compose-blue               ← Source config files (copy to /etc/nginx)
-│   └── odoo18-compose-green
-├── setup.sh                    ← One-time setup script
-└── switch.sh                   ← Traffic switch script
+    └── odoo18-zerodowntime     ← Symlink to active config
 ```
 
 ---
 
-## Config Files
+## Nginx Config Features
 
-### odoo18-compose-blue
+Both site configs (`odoo18-compose-primary` and `odoo18-compose-standby`) include:
 
-Proxies traffic to the Blue container (`127.0.0.1:8518` for web, `127.0.0.1:8572` for longpolling).
+**TLS / SSL**
+- `TLSv1.2 TLSv1.3` only — no older protocols
+- Modern cipher suite (ECDHE + CHACHA20)
+- `ssl_session_cache shared:SSL:10m` — session reuse across workers
+- `ssl_session_tickets off` — forward secrecy
+- OCSP stapling (`ssl_stapling on`) — faster handshake, no CRL round-trip
+- IPv6 support: `listen [::]:443 ssl http2`
 
-**Key sections:**
+**HTTP/2**
+- Enabled on both IPv4 and IPv6 listeners (`listen 443 ssl http2`)
 
-```nginx
-upstream odoo_blue {
-    server 127.0.0.1:8518;
-}
+**Security Headers**
+- `Strict-Transport-Security` with `preload` (2-year max-age)
+- `X-Frame-Options: SAMEORIGIN`
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: strict-origin-when-cross-origin`
 
-upstream odoo_blue_longpolling {
-    server 127.0.0.1:8572;
-}
-```
+**Proxy**
+- `upstream keepalive 32` — reuse connections to Odoo (no per-request TCP overhead)
+- `proxy_http_version 1.1` + `Connection ""` — required for upstream keepalive
+- `proxy_next_upstream error timeout http_502 http_503 http_504` — automatic retry on transient errors
+- Separate upstream blocks for web and longpolling
 
-```nginx
-# Longpolling — must be before the root location block
-location /longpolling {
-    proxy_pass http://odoo_blue_longpolling;
-    ...
-}
+**WebSocket / Longpolling**
+- `/websocket` — Odoo 18 bus (3600s read/send timeout)
+- `/longpolling` — legacy bus path (720s timeout)
+- Both use `proxy_buffering off` for real-time delivery
 
-# Main application
-location / {
-    proxy_pass http://odoo_blue;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_read_timeout    720s;
-    proxy_connect_timeout 720s;
-    proxy_send_timeout    720s;
-    ...
-}
+**Static Assets**
+- `location ~* \.(js|css|png|...)$` — 7-day browser cache, `Cache-Control: public, immutable`
+- `access_log off` — reduces log noise for static files
 
-# Static assets — cached aggressively
-location ~* \.(js|css|png|jpg|jpeg|gif|ico|woff|woff2|ttf|svg)$ {
-    proxy_pass http://odoo_blue;
-    expires 864000;
-    add_header Cache-Control "public, immutable";
-}
-```
+**Compression**
+- `gzip on` with `gzip_vary on` (correct Vary header for CDN compatibility)
+- `gzip_comp_level 5` — balanced CPU/ratio
+- Covers: text, CSS, JS, JSON, XML, SVG, WOFF/WOFF2
 
-**Other settings:**
-- `client_max_body_size 100m` — allows large file uploads
-- `gzip on` — compresses responses for JS, CSS, JSON
-- `ssl_protocols TLSv1.2 TLSv1.3` — modern TLS only
-- Log file: `/var/log/nginx/odoo18-compose-blue.access.log`
-
----
-
-### odoo18-compose-green
-
-Identical structure to `odoo18-compose-blue`, but targets the Green container:
-
-```nginx
-upstream odoo_green {
-    server 127.0.0.1:8618;      # ← different port
-}
-
-upstream odoo_green_longpolling {
-    server 127.0.0.1:8672;      # ← different port
-}
-```
-
-Log file: `/var/log/nginx/odoo18-compose-green.access.log`
-
-> Both config files use the same `server_name zerodowntime.lemacore.com`. Only one is active at a time via the symlink, so there is no conflict.
+**Certbot Renewal**
+- `location /.well-known/acme-challenge/ { root /var/www/certbot; }` — webroot renewal without stopping Nginx
 
 ---
 
@@ -178,89 +145,163 @@ Log file: `/var/log/nginx/odoo18-compose-green.access.log`
 
 ### setup.sh
 
-Run **once** on the server to obtain the SSL certificate, install Nginx configs, and set blue as the default active environment.
+Run **once** on a fresh server. Obtains the SSL certificate, installs Nginx configs, and activates primary as the default slot.
 
 ```bash
-sudo bash /opt/lemacore/nginx-bluegreen/setup.sh
+sudo bash /opt/zerodowntime/nginx/setup.sh
 ```
 
 **What it does:**
 
-1. Stops Nginx so certbot can bind port 80
-2. Runs `certbot certonly --standalone -d zerodowntime.lemacore.com` to obtain the SSL certificate
-3. Copies `odoo18-compose-blue` and `odoo18-compose-green` to `/etc/nginx/sites-available/`
-4. Creates symlink: `sites-enabled/odoo18-zerodowntime → sites-available/odoo18-compose-blue`
-5. Removes `/etc/nginx/sites-enabled/default` (prevents conflicts)
-6. Runs `nginx -t` to validate
-7. Starts Nginx via `systemctl start nginx`
+1. Validates that `nginx` and `certbot` are installed
+2. Checks DNS resolution for the domain (warns if unresolved)
+3. Runs `certbot certonly --standalone` to obtain the certificate (skips if cert already exists)
+4. Creates `/var/www/certbot` for future webroot renewals
+5. Copies `odoo18-compose-primary` and `odoo18-compose-standby` to `/etc/nginx/sites-available/`
+6. Creates symlink: `sites-enabled/odoo18-zerodowntime → odoo18-compose-primary`
+7. Removes the default Nginx page
+8. Validates config (`nginx -t`) and starts Nginx
+9. Writes a sudoers file (`/etc/sudoers.d/odoo-nginx`) so the deploy user can reload Nginx without a password
 
-> Requires `certbot` to be installed: `sudo apt install certbot`
+> **Idempotent:** Safe to run again — certbot is skipped if the certificate already exists.
 
 ---
 
 ### switch.sh
 
-Switches traffic between blue and green. Called automatically by GitHub Actions during deployment, or manually when needed.
+Switches Nginx traffic between primary and standby. Called automatically by GitHub Actions during deployment.
 
 ```bash
-# Usage
-sudo bash /opt/lemacore/nginx-bluegreen/switch.sh [blue|green]
-
-# Examples
-sudo bash /opt/lemacore/nginx-bluegreen/switch.sh green
-sudo bash /opt/lemacore/nginx-bluegreen/switch.sh blue
+sudo bash /opt/zerodowntime/nginx/switch.sh primary
+sudo bash /opt/zerodowntime/nginx/switch.sh standby
 ```
 
 **What it does:**
 
-1. Validates argument is `blue` or `green`
-2. Updates symlink: `sites-enabled/odoo18-zerodowntime → sites-available/odoo18-compose-{target}`
-3. Runs `nginx -t` — aborts if config is invalid
-4. Runs `nginx -s reload` — graceful reload, no dropped connections
-5. Prints which port is now active
+1. Validates the argument is `primary` or `standby`
+2. Verifies the target config file exists in `sites-available/`
+3. Detects and shows the currently active slot
+4. Updates the symlink atomically
+5. Runs `nginx -t` — aborts if the config is invalid
+6. Runs `nginx -s reload` — graceful, no dropped connections
+7. Prints the new active slot and port
 
 **Example output:**
 ```
-🔀 Switching Nginx → green...
-🧪 Testing config...
-nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
-nginx: configuration file /etc/nginx/nginx.conf test is successful
-🔄 Reloading Nginx...
-✅ Active: GREEN (port 8618)
+[INFO]  Current : primary (port 8018)
+[INFO]  Target  : standby (port 8118)
+[INFO]  Updating symlink...
+[INFO]  Validating Nginx config...
+[INFO]  Reloading Nginx...
+
+[OK]    Active: STANDBY (port 8118)
 ```
+
+---
+
+### resetup.sh
+
+Re-applies Nginx configs from the repo without running certbot. Use this to refresh configs after editing them, or to recover from a broken state.
+
+```bash
+sudo bash /opt/zerodowntime/nginx/resetup.sh
+```
+
+**What it does:**
+
+1. Removes all known stale symlinks (including old `blue`/`green` naming)
+2. Copies updated config files from the repo to `/etc/nginx/sites-available/`
+3. Re-creates the symlink pointing to primary
+4. Reloads or starts Nginx
+
+> **Idempotent:** Safe to run multiple times.
+
+---
+
+### shutdown.sh
+
+Removes all Odoo Nginx configuration from the server. Nginx keeps running and serves other sites.
+
+```bash
+# Interactive (asks for confirmation)
+sudo bash /opt/zerodowntime/nginx/shutdown.sh
+
+# Skip confirmation
+sudo bash /opt/zerodowntime/nginx/shutdown.sh --yes
+
+# Also delete log files
+sudo bash /opt/zerodowntime/nginx/shutdown.sh --yes --purge-logs
+
+# Restore the default Nginx welcome page
+sudo bash /opt/zerodowntime/nginx/shutdown.sh --yes --restore-default
+```
+
+**Flags:**
+
+| Flag | Description |
+|---|---|
+| `--yes` | Skip interactive confirmation prompt |
+| `--purge-logs` | Delete `odoo-primary.*` and `odoo-standby.*` log files |
+| `--restore-default` | Re-enable `/etc/nginx/sites-enabled/default` (Nginx welcome page) |
+
+**What it removes:**
+
+- `sites-enabled/odoo18-zerodowntime` (symlink)
+- `sites-available/odoo18-compose-primary`
+- `sites-available/odoo18-compose-standby`
+- `/etc/sudoers.d/odoo-nginx` (if it exists)
+- Log files (only with `--purge-logs`)
+
+> Docker containers are NOT affected.
 
 ---
 
 ## SSL Certificate
 
-SSL is managed by Certbot (Let's Encrypt). The certificate is referenced in both `odoo18-compose-blue` and `odoo18-compose-green`:
+SSL is managed by Certbot (Let's Encrypt). Certificates are stored at:
 
-```nginx
-ssl_certificate     /etc/letsencrypt/live/zerodowntime.lemacore.com/fullchain.pem;
-ssl_certificate_key /etc/letsencrypt/live/zerodowntime.lemacore.com/privkey.pem;
+```
+/etc/letsencrypt/live/erp.zerodowntime.com/fullchain.pem
+/etc/letsencrypt/live/erp.zerodowntime.com/privkey.pem
+/etc/letsencrypt/live/erp.zerodowntime.com/chain.pem
 ```
 
-**Issue certificate (first time):**
+**First-time issuance** is handled by `setup.sh` automatically.
 
-`setup.sh` handles this automatically using `certbot --standalone`. To run it manually:
+**Auto-renewal** is managed by the Certbot systemd timer installed with the `certbot` package:
 
 ```bash
-sudo systemctl stop nginx
-sudo certbot certonly --standalone --non-interactive --agree-tos \
-  --email aldi.saputra@mazuta.id \
-  -d zerodowntime.lemacore.com
-sudo systemctl start nginx
-```
-
-**Auto-renewal** is handled by the Certbot systemd timer (installed automatically). Verify it is active:
-```bash
+# Verify the timer is active
 sudo systemctl status certbot.timer
+
+# Test renewal (dry run)
+sudo certbot renew --dry-run
+
+# Force renewal
+sudo certbot renew
 ```
 
-**Manual renewal:**
+After renewal, Nginx does not need to be restarted — it reads the certificate files on each TLS handshake.
+
+---
+
+## Sudoers Setup
+
+`setup.sh` automatically writes `/etc/sudoers.d/odoo-nginx` to allow the deploy user to run Nginx commands without a password (required for GitHub Actions SSH deploy):
+
+```
+ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/nginx
+ubuntu ALL=(ALL) NOPASSWD: /usr/bin/ln
+ubuntu ALL=(ALL) NOPASSWD: /opt/zerodowntime/nginx/switch.sh
+ubuntu ALL=(ALL) NOPASSWD: /opt/zerodowntime/nginx/shutdown.sh
+```
+
+To configure manually (replace `ubuntu` with your SSH username):
+
 ```bash
-sudo certbot renew --dry-run   # Test only
-sudo certbot renew             # Actually renew
+echo "ubuntu ALL=(ALL) NOPASSWD: /usr/sbin/nginx" | sudo tee /etc/sudoers.d/odoo-nginx
+echo "ubuntu ALL=(ALL) NOPASSWD: /usr/bin/ln"     | sudo tee -a /etc/sudoers.d/odoo-nginx
+sudo chmod 440 /etc/sudoers.d/odoo-nginx
 ```
 
 ---
@@ -268,32 +309,54 @@ sudo certbot renew             # Actually renew
 ## Commands Reference
 
 ```bash
-# Test Nginx configuration
-sudo nginx -t
+# --- Setup & Recovery ---
 
-# Reload Nginx (graceful, no downtime)
-sudo nginx -s reload
+# One-time setup (fresh server)
+sudo bash /opt/zerodowntime/nginx/setup.sh
 
-# Full restart (avoid in production)
-sudo systemctl restart nginx
+# Re-apply configs without certbot (idempotent)
+sudo bash /opt/zerodowntime/nginx/resetup.sh
+
+# Remove all Odoo nginx configs
+sudo bash /opt/zerodowntime/nginx/shutdown.sh --yes
+
+# Remove configs + delete log files
+sudo bash /opt/zerodowntime/nginx/shutdown.sh --yes --purge-logs
+
+# --- Traffic Switching ---
+
+# Switch to primary
+sudo bash /opt/zerodowntime/nginx/switch.sh primary
+
+# Switch to standby
+sudo bash /opt/zerodowntime/nginx/switch.sh standby
 
 # Check which config is active
-ls -la /etc/nginx/sites-enabled/odoo18-zerodowntime   # symlink name
+readlink /etc/nginx/sites-enabled/odoo18-zerodowntime
 
-# View access logs
-sudo tail -f /var/log/nginx/odoo18-compose-blue.access.log
-sudo tail -f /var/log/nginx/odoo18-compose-green.access.log
+# --- Nginx Operations ---
 
-# View error logs
-sudo tail -f /var/log/nginx/odoo18-compose-blue.error.log
-sudo tail -f /var/log/nginx/odoo18-compose-green.error.log
+# Test config syntax
+sudo nginx -t
 
-# Manual switch to green
-sudo bash /opt/lemacore/nginx-bluegreen/switch.sh green
+# Graceful reload (no downtime)
+sudo nginx -s reload
 
-# Manual switch to blue
-sudo bash /opt/lemacore/nginx-bluegreen/switch.sh blue
+# Status
+sudo systemctl status nginx
 
-# Check SSL certificate expiry
+# --- Logs ---
+
+sudo tail -f /var/log/nginx/odoo-primary.access.log
+sudo tail -f /var/log/nginx/odoo-primary.error.log
+sudo tail -f /var/log/nginx/odoo-standby.access.log
+sudo tail -f /var/log/nginx/odoo-standby.error.log
+
+# --- SSL ---
+
+# Check certificate expiry
 sudo certbot certificates
+
+# Test renewal (dry run)
+sudo certbot renew --dry-run
 ```

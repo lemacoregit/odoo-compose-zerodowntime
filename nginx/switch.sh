@@ -1,25 +1,75 @@
-#!/bin/bash
-# Switch Nginx between blue and green
-# Usage: sudo bash switch.sh blue | sudo bash switch.sh green
+#!/usr/bin/env bash
+# Switch Nginx traffic between primary and standby slots.
+# Called by GitHub Actions during deployment or run manually.
+#
+# Usage:
+#   sudo bash switch.sh primary
+#   sudo bash switch.sh standby
 
-set -e
+set -euo pipefail
 
-TARGET=$1
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
 SITES_AVAILABLE="/etc/nginx/sites-available"
 SITES_ENABLED="/etc/nginx/sites-enabled"
+SYMLINK_NAME="odoo18-zerodowntime"
 
-if [[ "$TARGET" != "blue" && "$TARGET" != "green" ]]; then
-    echo "Usage: sudo bash switch.sh [blue|green]"
-    exit 1
+declare -A SLOT_PORT=([primary]="8018" [standby]="8118")
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+info() { echo "[INFO]  $*"; }
+die()  { echo "[ERROR] $*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Validate input
+# ---------------------------------------------------------------------------
+
+TARGET="${1:-}"
+[[ "$TARGET" == "primary" || "$TARGET" == "standby" ]] \
+    || die "Usage: sudo bash switch.sh [primary|standby]"
+
+CONFIG_FILE="${SITES_AVAILABLE}/odoo18-compose-${TARGET}"
+[[ -f "${CONFIG_FILE}" ]] \
+    || die "Config file not found: ${CONFIG_FILE} — run setup.sh first"
+
+# ---------------------------------------------------------------------------
+# Detect current active slot
+# ---------------------------------------------------------------------------
+
+CURRENT="(none)"
+if [[ -L "${SITES_ENABLED}/${SYMLINK_NAME}" ]]; then
+    CURRENT_LINK=$(readlink "${SITES_ENABLED}/${SYMLINK_NAME}")
+    case "${CURRENT_LINK}" in
+        *primary*) CURRENT="primary (port ${SLOT_PORT[primary]})" ;;
+        *standby*) CURRENT="standby (port ${SLOT_PORT[standby]})" ;;
+        *)         CURRENT="${CURRENT_LINK}" ;;
+    esac
 fi
 
-echo "🔀 Switching Nginx → $TARGET..."
-sudo ln -sf $SITES_AVAILABLE/odoo18-compose-$TARGET $SITES_ENABLED/odoo18-zerodowntime
+# ---------------------------------------------------------------------------
+# Switch
+# ---------------------------------------------------------------------------
 
-echo "🧪 Testing config..."
+info "Current : ${CURRENT}"
+info "Target  : ${TARGET} (port ${SLOT_PORT[$TARGET]})"
+
+info "Updating symlink..."
+sudo ln -sf "${CONFIG_FILE}" "${SITES_ENABLED}/${SYMLINK_NAME}"
+
+info "Validating Nginx config..."
 sudo nginx -t
 
-echo "🔄 Reloading Nginx..."
+info "Reloading Nginx..."
 sudo nginx -s reload
 
-echo "✅ Active: $(echo $TARGET | tr '[:lower:]' '[:upper:]') (port $([ "$TARGET" = "blue" ] && echo "8518" || echo "8618"))"
+# ---------------------------------------------------------------------------
+# Done
+# ---------------------------------------------------------------------------
+
+echo
+echo "[OK]    Active: ${TARGET^^} (port ${SLOT_PORT[$TARGET]})"

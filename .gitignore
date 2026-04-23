@@ -173,3 +173,7 @@ odoo-web/sessions/
 odoo/logs/
 
 .env
+
+skills-lock.json
+.agents
+.claude
