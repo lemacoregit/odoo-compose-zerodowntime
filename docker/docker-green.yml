@@ -1,0 +1,89 @@
+version: '3'
+
+networks:
+  odoo-network:
+    name: odoo18-zerodowntime-network
+    driver: bridge
+
+services:
+
+  db:
+    image: postgres:16
+    container_name: odoo18-zerodowntime-postgres
+    networks:
+      - odoo-network
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    environment:
+      POSTGRES_USER: '${POSTGRES_USER}'
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
+      PGDATA: /var/lib/postgresql/data
+    volumes:
+      - ./odoo-postgres:/var/lib/postgresql/data
+    restart: always
+
+  redis:
+    image: redis:latest
+    container_name: odoo18-zerodowntime-redis
+    networks:
+      - odoo-network
+    restart: always
+    ports:
+      - "${REDIS_EXTERNAL_PORT:-5030}:6379"
+    command:
+      - redis-server
+      - --requirepass
+      - '${ODOO_SESSION_REDIS_PASSWORD}'
+      - --appendonly
+      - "no"
+      - --timeout
+      - "300"
+    volumes:
+      - ./odoo-redis/data/:/data
+      - ./odoo-redis/conf/:/usr/local/etc/redis/
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${ODOO_SESSION_REDIS_PASSWORD}", "--no-auth-warning", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  odoo:
+    image: odoo:18.0
+    user: root
+    container_name: odoo18-zerodowntime-green
+    networks:
+      - odoo-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_started
+    ports:
+      - "${ODOO_GREEN_HTTP_PORT}:8069"
+      - "${ODOO_GREEN_LONGPOLLING_PORT}:8072"
+    environment:
+      HOST: db
+      USER: '${POSTGRES_USER}'
+      PASSWORD: '${POSTGRES_PASSWORD}'
+      ODOO_SESSION_REDIS: '${ODOO_SESSION_REDIS}'
+      ODOO_SESSION_REDIS_HOST: '${ODOO_SESSION_REDIS_HOST}'
+      ODOO_SESSION_REDIS_PORT: '${ODOO_SESSION_REDIS_PORT}'
+      ODOO_SESSION_REDIS_PASSWORD: '${ODOO_SESSION_REDIS_PASSWORD}'
+      ODOO_SESSION_REDIS_SSL: '${ODOO_SESSION_REDIS_SSL}'
+      ODOO_SESSION_REDIS_SSL_CERT_REQS: '${ODOO_SESSION_REDIS_SSL_CERT_REQS}'
+      ODOO_SESSION_REDIS_CLUSTER: '${ODOO_SESSION_REDIS_CLUSTER}'
+      ODOO_SESSION_REDIS_URL: '${ODOO_SESSION_REDIS_URL}'
+      ODOO_SESSION_REDIS_PREFIX: '${ODOO_SESSION_REDIS_PREFIX}'
+      ODOO_SESSION_REDIS_EXPIRATION: '${ODOO_SESSION_REDIS_EXPIRATION}'
+      ODOO_SESSION_REDIS_EXPIRATION_ANONYMOUS: '${ODOO_SESSION_REDIS_EXPIRATION_ANONYMOUS}'
+    volumes:
+      - ./entrypoint.sh:/entrypoint.sh
+      - ./odoo/odoo.conf:/etc/odoo/odoo.conf
+      - ./odoo/logs:/etc/odoo/logs
+      - ./etc/addons:/etc/odoo/addons
+      - ./etc/filestore:/etc/odoo/filestore
+      - ./etc/sessions:/etc/odoo/sessions
+      - ./etc/requirements.txt:/etc/odoo/requirements.txt
+      - ./odoo/custom-addons:/mnt/custom-addons
+      - ./odoo/default-addons:/mnt/default-addons
+    restart: always

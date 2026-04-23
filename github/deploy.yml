@@ -1,0 +1,285 @@
+name: Odoo CI/CD - Auto Deploy & Upgrade
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      force_modules:
+        description: "Force upgrade specific modules, bypasses auto-detection (comma-separated, e.g. sale,purchase)"
+        required: false
+        default: ""
+
+jobs:
+  detect-changes:
+    name: 🔍 Detect Changed Modules
+    runs-on: ubuntu-latest
+    outputs:
+      changed_modules: ${{ steps.detect.outputs.changed_modules }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed Odoo modules
+        id: detect
+        run: |
+          FORCE="${{ github.event.inputs.force_modules }}"
+          if [ -n "$FORCE" ]; then
+            echo "⚡ Force upgrade modules: $FORCE"
+            echo "changed_modules=$FORCE" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          MODULES=""
+          for file in $CHANGED_FILES; do
+            MODULE_DIR=$(echo "$file" | cut -d'/' -f1)
+            if [ -f "$MODULE_DIR/__manifest__.py" ]; then
+              if ! echo "$MODULES" | grep -qw "$MODULE_DIR"; then
+                MODULES="$MODULES $MODULE_DIR"
+              fi
+            fi
+          done
+
+          MODULES=$(echo "$MODULES" | xargs)
+
+          if [ -z "$MODULES" ]; then
+            echo "ℹ️ No changes detected in any Odoo module"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "changed_modules=" >> $GITHUB_OUTPUT
+          else
+            MODULES_CSV=$(echo "$MODULES" | tr ' ' ',')
+            echo "✅ Changed modules: $MODULES_CSV"
+            echo "changed_modules=$MODULES_CSV" >> $GITHUB_OUTPUT
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  deploy:
+    name: 🚀 Deploy to Server
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Pull latest code on server
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} \
+            "cd ${{ secrets.ODOO_ADDONS_PATH }} && \
+             git config core.fileMode false && \
+             git fetch origin && \
+             git reset --hard origin/${{ github.ref_name }}"
+
+      - name: Blue-Green Deploy
+        run: |
+          ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=no \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} << 'EOF'
+
+            set -e
+            cd ${{ secrets.COMPOSE_PROJECT_PATH }}
+
+            # Determine which container is currently active
+            if docker ps --format '{{.Names}}' | grep -q "odoo18-zerodowntime-blue"; then
+              ACTIVE="blue"
+              NEXT="green"
+              NEXT_PORT=8518
+            else
+              ACTIVE="green"
+              NEXT="blue"
+              NEXT_PORT=8618
+            fi
+
+            echo "🔵 Active: $ACTIVE → deploying to $NEXT (port $NEXT_PORT)"
+
+            # Pull latest image
+            docker compose -f docker-$NEXT.yml pull odoo
+
+            # Deploy standby container
+            docker compose -f docker-$NEXT.yml up -d --force-recreate odoo
+
+            # Health check new container (max 90s)
+            echo "⏳ Waiting for $NEXT to be ready (max 90s)..."
+            sleep 10
+            READY=false
+            for i in $(seq 1 12); do
+              HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+                http://localhost:$NEXT_PORT/web/health 2>/dev/null || echo "000")
+              echo "Health check $i/12 → HTTP $HTTP"
+              if [ "$HTTP" = "200" ]; then
+                READY=true
+                echo "✅ $NEXT is ready!"
+                break
+              fi
+              sleep 7
+            done
+
+            # Abort if not ready
+            if [ "$READY" = "false" ]; then
+              echo "❌ $NEXT failed health check — aborting, keeping $ACTIVE"
+              docker compose -f docker-$NEXT.yml down
+              exit 1
+            fi
+
+            # Switch Nginx to new container
+            bash ${{ secrets.NGINX_SWITCH_SCRIPT_PATH }} $NEXT
+            echo "🔀 Nginx switched → $NEXT"
+
+            # Stop old container
+            docker compose -f docker-$ACTIVE.yml down
+            echo "🛑 $ACTIVE stopped"
+
+          EOF
+
+      - name: Wait for Odoo to be stable
+        run: |
+          echo "⏳ Waiting for Odoo to be stable after switch (max 60s)..."
+          sleep 5
+
+          for i in $(seq 1 10); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 \
+              "${{ secrets.ODOO_URL }}/web/health" 2>/dev/null || echo "000")
+            echo "Health check $i/10 → HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✅ Odoo is ready!"; break
+            fi
+            if [ "$i" = "10" ]; then
+              echo "❌ Odoo not responding after Nginx switch"
+              exit 1
+            fi
+            sleep 6
+          done
+
+      - name: Upgrade changed modules via XML-RPC
+        env:
+          ODOO_URL:            ${{ secrets.ODOO_URL }}
+          ODOO_DB:             ${{ secrets.ODOO_DB }}
+          ODOO_ADMIN_USER:     ${{ secrets.ODOO_ADMIN_USER }}
+          ODOO_ADMIN_PASSWORD: ${{ secrets.ODOO_ADMIN_PASSWORD }}
+        run: |
+          python3 ${{ secrets.UPGRADE_SCRIPT_PATH }} \
+            --modules "${{ needs.detect-changes.outputs.changed_modules }}"
+
+  notify:
+    name: 📢 Send Email Notification
+    runs-on: ubuntu-latest
+    needs: [detect-changes, deploy]
+    if: always() && needs.detect-changes.outputs.has_changes == 'true'
+
+    steps:
+      - name: Send Email notification
+        env:
+          EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
+          SMTP_SERVER:      ${{ secrets.SMTP_SERVER }}
+          SMTP_PORT:        ${{ secrets.SMTP_PORT }}
+          SMTP_USER:        ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:    ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_FROM:       ${{ secrets.EMAIL_FROM }}
+          DEPLOY_STATUS:    ${{ needs.deploy.result }}
+          MODULES:          ${{ needs.detect-changes.outputs.changed_modules }}
+          ACTOR:            ${{ github.actor }}
+          BRANCH:           ${{ github.ref_name }}
+          SHORT_COMMIT:     ${{ github.sha }}
+          RUN_URL:          ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 << 'PYEOF'
+          import smtplib, os
+          from email.mime.multipart import MIMEMultipart
+          from email.mime.text import MIMEText
+          from email.utils import parseaddr
+
+          recipients_raw = os.environ.get("EMAIL_RECIPIENTS", "")
+          if not recipients_raw.strip():
+              print("⚠️ EMAIL_RECIPIENTS is empty, skipping"); exit(0)
+
+          recipients  = [r.strip() for r in recipients_raw.split(",") if r.strip()]
+          smtp_server = os.environ["SMTP_SERVER"]
+          smtp_port   = int(os.environ.get("SMTP_PORT", "587"))
+          smtp_user   = os.environ["SMTP_USER"]
+          smtp_pass   = os.environ["SMTP_PASSWORD"]
+          email_from      = os.environ["EMAIL_FROM"]
+          _, email_from_addr = parseaddr(email_from)
+          status      = os.environ["DEPLOY_STATUS"]
+          color       = "#36a64f" if status == "success" else "#d9534f"
+          emoji       = "✅" if status == "success" else "❌"
+          status_txt  = "SUCCESS" if status == "success" else "FAILED"
+          short_commit = os.environ["SHORT_COMMIT"][:7]
+          subject     = f"{emoji} [Odoo Deploy] {status_txt} — {os.environ['BRANCH']} ({short_commit})"
+
+          html = f"""
+          <html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
+          <div style="max-width:600px;margin:auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.1);">
+            <div style="background:{color};padding:20px;text-align:center;">
+              <h2 style="color:#fff;margin:0;">{emoji} Odoo Deploy {status_txt}</h2>
+            </div>
+            <div style="padding:24px;">
+              <table width="100%" cellpadding="8" style="border-collapse:collapse;font-size:14px;">
+                <tr style="border-bottom:1px solid #eee;"><td style="color:#888;width:160px;">Branch</td><td><code style="background:#f4f4f4;padding:2px 6px;border-radius:4px;">{os.environ['BRANCH']}</code></td></tr>
+                <tr style="border-bottom:1px solid #eee;"><td style="color:#888;">Commit</td><td><code style="background:#f4f4f4;padding:2px 6px;border-radius:4px;">{short_commit}</code></td></tr>
+                <tr style="border-bottom:1px solid #eee;"><td style="color:#888;">Modules</td><td><code style="background:#f4f4f4;padding:2px 6px;border-radius:4px;">{os.environ['MODULES']}</code></td></tr>
+                <tr><td style="color:#888;">Triggered by</td><td><strong>{os.environ['ACTOR']}</strong></td></tr>
+              </table>
+              <div style="margin-top:24px;text-align:center;">
+                <a href="{os.environ['RUN_URL']}" style="background:{color};color:#fff;padding:10px 24px;border-radius:6px;text-decoration:none;font-weight:bold;">
+                  🔗 View Workflow Details
+                </a>
+              </div>
+            </div>
+            <div style="padding:12px 24px;background:#f9f9f9;font-size:12px;color:#aaa;text-align:center;">
+              Sent automatically by GitHub Actions · Odoo CI/CD
+            </div>
+          </div></body></html>
+          """
+
+          def build_msg(recipient):
+              msg = MIMEMultipart("alternative")
+              msg["Subject"] = subject
+              msg["From"]    = email_from
+              msg["To"]      = recipient
+              msg.attach(MIMEText(html, "html"))
+              return msg
+
+          for recipient in recipients:
+              msg = build_msg(recipient)
+              try:
+                  if smtp_port == 465:
+                      with smtplib.SMTP_SSL(smtp_server, smtp_port) as s:
+                          s.login(smtp_user, smtp_pass)
+                          s.sendmail(email_from_addr, recipient, msg.as_string())
+                  else:
+                      with smtplib.SMTP(smtp_server, smtp_port) as s:
+                          s.ehlo()
+                          s.starttls()
+                          s.ehlo()
+                          s.login(smtp_user, smtp_pass)
+                          s.sendmail(email_from_addr, recipient, msg.as_string())
+                  print(f"✅ Email sent → {recipient}")
+              except Exception as e:
+                  print(f"❌ Failed to send → {recipient}: {e}")
+          PYEOF
+
+  no-changes:
+    name: ℹ️ No Module Changes Detected
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has_changes == 'false'
+    steps:
+      - run: echo "ℹ️ No Odoo module changes detected, deployment skipped."
