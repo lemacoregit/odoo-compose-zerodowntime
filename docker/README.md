@@ -24,7 +24,7 @@
 
 ## Quick Deploy
 
-Step-by-step untuk deploy dari nol di server baru.
+Step-by-step guide to deploy from scratch on a new server.
 
 ### Step 1 — Clone project
 
@@ -35,7 +35,7 @@ git clone https://github.com/your-org/docker-zero-downtime /opt/zerodowntime
 cd /opt/zerodowntime/docker
 ```
 
-### Step 2 — Buat direktori yang diperlukan
+### Step 2 — Create required directories
 
 ```bash
 # Data directories (git-ignored)
@@ -43,49 +43,49 @@ mkdir -p etc/addons etc/filestore etc/sessions etc/logs
 mkdir -p odoo-postgres
 mkdir -p addons/default
 
-# Custom & extra addons — clone atau copy module kamu ke sini
-# mkdir -p addons/custom addons/extra  ← sudah ada di repo
+# Custom & extra addons — clone or copy your modules here
+# mkdir -p addons/custom addons/extra  ← already in repo
 ```
 
-### Step 3 — Konfigurasi environment
+### Step 3 — Configure environment
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-Minimal yang **wajib** diubah:
+Minimum **required** changes:
 
 ```env
-POSTGRES_PASSWORD=ganti_password_kuat
+POSTGRES_PASSWORD=your_strong_password
 POSTGRES_DB=odoo
 
-ODOO_SESSION_REDIS_PASSWORD=ganti_redis_password
-ODOO_SESSION_REDIS_URL=redis://:ganti_redis_password@redis:6379/0
+ODOO_SESSION_REDIS_PASSWORD=your_redis_password
+ODOO_SESSION_REDIS_URL=redis://:your_redis_password@redis:6379/0
 ```
 
-### Step 4 — Konfigurasi Odoo
+### Step 4 — Configure Odoo
 
-Edit `etc/conf/odoo.conf` — sesuaikan minimal dua baris ini:
+Edit `etc/conf/odoo.conf` — update at minimum these two values:
 
 ```ini
-admin_passwd = ganti_master_password_kuat
+admin_passwd = your_strong_master_password
 db_name = odoo
 ```
 
-> `db_name` harus sama dengan `POSTGRES_DB` di `.env`.
+> `db_name` must match `POSTGRES_DB` in `.env`.
 
-### Step 5 — Jalankan container
+### Step 5 — Start containers
 
 ```bash
-# Dari dalam folder docker/
+# Run from inside the docker/ folder
 docker compose up -d
 
-# Tunggu ~30 detik lalu cek status
+# Wait ~30 seconds then check status
 docker compose ps
 ```
 
-Output yang diharapkan:
+Expected output:
 
 ```
 NAME                            STATUS
@@ -94,14 +94,14 @@ odoo18-zerodowntime-redis       Up (healthy)
 odoo18-zerodowntime-primary     Up (healthy)
 ```
 
-### Step 6 — Verifikasi Odoo berjalan
+### Step 6 — Verify Odoo is running
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" http://localhost:8018/web/health
 # Expected: 200
 ```
 
-### Step 7 — Cek logs jika ada masalah
+### Step 7 — Check logs if something is wrong
 
 ```bash
 # Odoo
