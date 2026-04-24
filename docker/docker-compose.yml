@@ -44,7 +44,7 @@ networks:
 services:
 
   db:
-    image: postgres:16
+    image: postgres:15
     container_name: odoo18-zerodowntime-postgres
     networks:
       - odoo-network
@@ -153,8 +153,8 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:8069/web/health || exit 1"]
       interval: 15s
       timeout: 10s
-      retries: 6
-      start_period: 30s
+      retries: 8
+      start_period: 90s
     deploy:
       resources:
         limits:
