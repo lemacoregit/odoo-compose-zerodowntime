@@ -56,10 +56,10 @@ services:
       - ./addons/extra:/mnt/extra-addons
       - ./addons/default:/mnt/default-addons
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8069/web/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf --max-time 8 http://localhost:8069/ > /dev/null"]
       interval: 15s
       timeout: 10s
-      retries: 6
+      retries: 8
       start_period: 90s
     logging:
       driver: "json-file"
