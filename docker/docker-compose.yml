@@ -32,7 +32,7 @@ x-odoo-base: &odoo-base
   logging:
     driver: "json-file"
     options:
-      max-size: "50m"
+      max-size: "100m"
       max-file: "5"
       tag: "{{.Name}}"
 
@@ -50,7 +50,7 @@ services:
       - odoo-network
     ports:
       - "${POSTGRES_PORT}:5432"
-    shm_size: '256mb'
+    shm_size: '1g'
     environment:
       POSTGRES_USER: '${POSTGRES_USER}'
       POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
@@ -58,29 +58,37 @@ services:
       # after POSTGRES_USER — Odoo database is created manually via UI instead
       POSTGRES_DB: postgres
       PGDATA: /var/lib/postgresql/data
-    # Tuning for a 4-8GB RAM production server — adjust shared_buffers to ~25% of total RAM
+    # Tuned for 12GB RAM / 6 CPU — adjust shared_buffers to ~25% of total RAM
     command:
       - "postgres"
       - "-c"
-      - "shared_buffers=256MB"
+      - "shared_buffers=3GB"
       - "-c"
-      - "effective_cache_size=768MB"
+      - "effective_cache_size=8GB"
       - "-c"
-      - "maintenance_work_mem=64MB"
+      - "maintenance_work_mem=512MB"
       - "-c"
       - "checkpoint_completion_target=0.9"
       - "-c"
-      - "wal_buffers=16MB"
+      - "wal_buffers=64MB"
       - "-c"
       - "work_mem=32MB"
       - "-c"
-      - "max_connections=200"
+      - "max_connections=100"
       - "-c"
       - "random_page_cost=1.1"
       - "-c"
       - "log_min_duration_statement=1000"
       - "-c"
       - "idle_in_transaction_session_timeout=30000"
+      - "-c"
+      - "max_worker_processes=6"
+      - "-c"
+      - "max_parallel_workers_per_gather=3"
+      - "-c"
+      - "max_parallel_workers=6"
+      - "-c"
+      - "max_parallel_maintenance_workers=3"
     volumes:
       - ./odoo-postgres:/var/lib/postgresql/data
     healthcheck:
@@ -97,10 +105,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1g
+          memory: 4g
           cpus: '2.0'
         reservations:
-          memory: 256m
+          memory: 1g
     restart: always
 
   redis:
@@ -161,8 +169,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 3g
-          cpus: '4.0'
+          memory: 5g
+          cpus: '3.5'
         reservations:
-          memory: 512m
-          cpus: '0.5'
+          memory: 1g
+          cpus: '1.0'
