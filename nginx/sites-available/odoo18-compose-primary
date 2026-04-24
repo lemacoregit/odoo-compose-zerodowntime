@@ -1,13 +1,13 @@
-# Odoo 18 — Primary slot (web: 8018, longpoll: 8027)
+# Odoo 18 — Primary slot (web: 8318, longpoll: 8327)
 # Activated via: sites-enabled/odoo18-zerodowntime -> sites-available/odoo18-compose-primary
 
 upstream odoo_primary {
-    server 127.0.0.1:8018;
+    server 127.0.0.1:8318;
     keepalive 32;
 }
 
 upstream odoo_primary_lp {
-    server 127.0.0.1:8027;
+    server 127.0.0.1:8327;
     keepalive 16;
 }
 

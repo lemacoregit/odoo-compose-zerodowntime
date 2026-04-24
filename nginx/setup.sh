@@ -158,7 +158,7 @@ fi
 echo
 success "Setup complete!"
 echo
-echo "  Active slot : PRIMARY (port 8018)"
+echo "  Active slot : PRIMARY (port 8318)"
 echo "  Domain      : https://${DOMAIN}"
 echo "  Symlink     : ${SITES_ENABLED}/${SYMLINK_NAME}"
 echo

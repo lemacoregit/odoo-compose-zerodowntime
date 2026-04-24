@@ -34,8 +34,8 @@ User Browser
      │
      │ /etc/nginx/sites-enabled/odoo18-zerodowntime  (symlink)
      │
-     ├── → odoo18-compose-primary  (port 8018/8027)
-     └── → odoo18-compose-standby  (port 8118/8127)
+     ├── → odoo18-compose-primary  (port 8318/8327)
+     └── → odoo18-compose-standby  (port 8418/8427)
 ```
 
 Switching traffic = update symlink + `nginx -s reload`. The reload is graceful — active connections are not dropped.
@@ -66,8 +66,8 @@ nginx -t && nginx -s reload
 
 | Slot | Web (host) | Longpolling (host) | Container web | Container longpoll |
 |---|---|---|---|---|
-| Primary | `8018` | `8027` | `8069` | `8072` |
-| Standby | `8118` | `8127` | `8069` | `8072` |
+| Primary | `8318` | `8327` | `8069` | `8072` |
+| Standby | `8418` | `8427` | `8069` | `8072` |
 
 Nginx proxies to the **host port**. Both containers run simultaneously on different host ports; only one is behind Nginx at a time.
 
@@ -78,8 +78,8 @@ Nginx proxies to the **host port**. Both containers run simultaneously on differ
 ```
 nginx/
 ├── sites-available/
-│   ├── odoo18-compose-primary   ← Nginx config for primary slot (8018/8027)
-│   └── odoo18-compose-standby  ← Nginx config for standby slot (8118/8127)
+│   ├── odoo18-compose-primary   ← Nginx config for primary slot (8318/8327)
+│   └── odoo18-compose-standby  ← Nginx config for standby slot (8418/8427)
 ├── setup.sh                    ← One-time setup (certbot + install configs)
 ├── switch.sh                   ← Switch active slot (primary ↔ standby)
 ├── resetup.sh                  ← Re-apply configs without certbot
@@ -188,13 +188,13 @@ sudo bash /opt/zerodowntime/nginx/switch.sh standby
 
 **Example output:**
 ```
-[INFO]  Current : primary (port 8018)
-[INFO]  Target  : standby (port 8118)
+[INFO]  Current : primary (port 8318)
+[INFO]  Target  : standby (port 8418)
 [INFO]  Updating symlink...
 [INFO]  Validating Nginx config...
 [INFO]  Reloading Nginx...
 
-[OK]    Active: STANDBY (port 8118)
+[OK]    Active: STANDBY (port 8418)
 ```
 
 ---

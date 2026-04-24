@@ -16,7 +16,7 @@ SITES_AVAILABLE="/etc/nginx/sites-available"
 SITES_ENABLED="/etc/nginx/sites-enabled"
 SYMLINK_NAME="odoo18-zerodowntime"
 
-declare -A SLOT_PORT=([primary]="8018" [standby]="8118")
+declare -A SLOT_PORT=([primary]="8318" [standby]="8418")
 
 # ---------------------------------------------------------------------------
 # Helpers

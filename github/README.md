@@ -257,9 +257,9 @@ The core deploy step runs over SSH:
 ```bash
 # 1. Detect active slot
 if docker ps | grep "odoo18-zerodowntime-primary"; then
-  ACTIVE="primary"   NEXT="standby"   NEXT_PORT=8118
+  ACTIVE="primary"   NEXT="standby"   NEXT_PORT=8418
 else
-  ACTIVE="standby"   NEXT="primary"   NEXT_PORT=8018
+  ACTIVE="standby"   NEXT="primary"   NEXT_PORT=8318
 fi
 
 # 2. Pull latest image

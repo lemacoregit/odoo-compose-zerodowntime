@@ -97,7 +97,7 @@ odoo18-zerodowntime-primary     Up (healthy)
 ### Step 6 — Verify Odoo is running
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8018/web/health
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8318/web/health
 # Expected: 200
 ```
 
@@ -121,8 +121,8 @@ docker logs --tail 20 odoo18-zerodowntime-redis
 The Docker setup uses three compose files. The primary file owns the shared infrastructure and the active Odoo instance. The standby file runs the second Odoo instance used during deployments.
 
 ```
-docker-compose.yml          →  db + redis + odoo-primary  (port 8018 / longpoll 8027)
-docker-compose.standby.yml  →  odoo-standby only          (port 8118 / longpoll 8127)
+docker-compose.yml          →  db + redis + odoo-primary  (port 8318 / longpoll 8327)
+docker-compose.standby.yml  →  odoo-standby only          (port 8418 / longpoll 8427)
 docker-compose.override.yml →  local dev overrides        (auto-merged, git-ignored)
 ```
 
@@ -139,7 +139,7 @@ At any given time, only one Odoo container is receiving traffic. The other is ei
       │                       │
  ┌────▼──────┐         ┌──────▼────┐
  │  PRIMARY  │         │  STANDBY  │
- │   :8018   │         │   :8118   │
+ │   :8318   │         │   :8418   │
  └───────────┘         └───────────┘
       │                       │
       └───────────┬───────────┘
@@ -200,16 +200,16 @@ The primary compose file. Creates the Docker network and runs all shared infrast
 |---|---|---|
 | `odoo18-zerodowntime-postgres` | `postgres:16` | Database |
 | `odoo18-zerodowntime-redis` | `redis:8.2.5` | Session store |
-| `odoo18-zerodowntime-primary` | `odoo:18.0` | Odoo web (port 8018) |
+| `odoo18-zerodowntime-primary` | `odoo:18.0` | Odoo web (port 8318) |
 
 **Port mapping:**
 
 | Service | Host Port | Container Port |
 |---|---|---|
-| Odoo web | `8018` (`ODOO_PRIMARY_HTTP_PORT`) | `8069` |
-| Longpolling | `8027` (`ODOO_PRIMARY_LONGPOLLING_PORT`) | `8072` |
+| Odoo web | `8318` (`ODOO_PRIMARY_HTTP_PORT`) | `8069` |
+| Longpolling | `8327` (`ODOO_PRIMARY_LONGPOLLING_PORT`) | `8072` |
 | PostgreSQL | `5016` (`POSTGRES_PORT`) | `5432` |
-| Redis | `5030` (`REDIS_EXTERNAL_PORT`) | `6379` |
+| Redis | `6030` (`REDIS_EXTERNAL_PORT`) | `6379` |
 
 ```bash
 # Bootstrap — start infra + primary odoo
@@ -233,14 +233,14 @@ The standby compose file. Always combined with the primary file. Joins the exist
 | Container | Image | Role |
 |---|---|---|
 | `odoo18-zerodowntime-standby-db-checker` | `busybox` | Waits for db to be ready |
-| `odoo18-zerodowntime-standby` | `odoo:18.0` | Odoo web (port 8118) |
+| `odoo18-zerodowntime-standby` | `odoo:18.0` | Odoo web (port 8418) |
 
 **Port mapping:**
 
 | Service | Host Port | Container Port |
 |---|---|---|
-| Odoo web | `8118` (`ODOO_STANDBY_HTTP_PORT`) | `8069` |
-| Longpolling | `8127` (`ODOO_STANDBY_LONGPOLLING_PORT`) | `8072` |
+| Odoo web | `8418` (`ODOO_STANDBY_HTTP_PORT`) | `8069` |
+| Longpolling | `8427` (`ODOO_STANDBY_LONGPOLLING_PORT`) | `8072` |
 
 ```bash
 # Start standby odoo
@@ -279,11 +279,11 @@ cp .env.example .env
 | `POSTGRES_PASSWORD` | PostgreSQL password | `your_strong_password` |
 | `POSTGRES_DB` | PostgreSQL database name | `odoo` |
 | `POSTGRES_PORT` | PostgreSQL host port | `5016` |
-| `ODOO_PRIMARY_HTTP_PORT` | Primary Odoo web host port | `8018` |
-| `ODOO_PRIMARY_LONGPOLLING_PORT` | Primary longpolling host port | `8027` |
-| `ODOO_STANDBY_HTTP_PORT` | Standby Odoo web host port | `8118` |
-| `ODOO_STANDBY_LONGPOLLING_PORT` | Standby longpolling host port | `8127` |
-| `REDIS_EXTERNAL_PORT` | Redis host port | `5030` |
+| `ODOO_PRIMARY_HTTP_PORT` | Primary Odoo web host port | `8318` |
+| `ODOO_PRIMARY_LONGPOLLING_PORT` | Primary longpolling host port | `8327` |
+| `ODOO_STANDBY_HTTP_PORT` | Standby Odoo web host port | `8418` |
+| `ODOO_STANDBY_LONGPOLLING_PORT` | Standby longpolling host port | `8427` |
+| `REDIS_EXTERNAL_PORT` | Redis host port | `6030` |
 | `ODOO_SESSION_REDIS` | Enable Redis session (`1` = yes) | `1` |
 | `ODOO_SESSION_REDIS_HOST` | Redis hostname (internal) | `redis` |
 | `ODOO_SESSION_REDIS_PORT` | Redis internal port | `6379` |
@@ -329,7 +329,7 @@ xmlrpc_port = 8069
 longpolling_port = 8072
 ```
 
-> **Important:** The host ports (`8018`, `8027`, `8118`, `8127`) are defined in `.env` and used by the compose files. The `odoo.conf` always uses the internal container ports `8069` and `8072`.
+> **Important:** The host ports (`8318`, `8327`, `8418`, `8427`) are defined in `.env` and used by the compose files. The `odoo.conf` always uses the internal container ports `8069` and `8072`.
 
 ---
 

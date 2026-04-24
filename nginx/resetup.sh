@@ -103,7 +103,7 @@ fi
 echo
 success "Re-setup complete!"
 echo
-echo "  Active slot : PRIMARY (port 8018)"
+echo "  Active slot : PRIMARY (port 8318)"
 echo "  Symlink     : ${SITES_ENABLED}/${SYMLINK_NAME}"
 echo
 echo "  Switch to standby : sudo bash ${SCRIPT_DIR}/switch.sh standby"

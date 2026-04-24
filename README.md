@@ -237,7 +237,7 @@ odoo18-zerodowntime-primary     Up (healthy)
 Test locally:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:8018/web/health
+curl -s -o /dev/null -w "%{http_code}" http://localhost:8318/web/health
 # Expected: 200
 ```
 
@@ -372,12 +372,12 @@ docker logs --tail 50 odoo18-zerodowntime-standby
 
 | Service | Host Port | Notes |
 |---|---|---|
-| Odoo Primary (web) | `8018` | Nginx → primary |
-| Odoo Primary (longpoll) | `8027` | Nginx → primary longpolling |
-| Odoo Standby (web) | `8118` | Nginx → standby |
-| Odoo Standby (longpoll) | `8127` | Nginx → standby longpolling |
+| Odoo Primary (web) | `8318` | Nginx → primary |
+| Odoo Primary (longpoll) | `8327` | Nginx → primary longpolling |
+| Odoo Standby (web) | `8418` | Nginx → standby |
+| Odoo Standby (longpoll) | `8427` | Nginx → standby longpolling |
 | PostgreSQL | `5016` | External DB tools access |
-| Redis | `5030` | External Redis tools access |
+| Redis | `6030` | External Redis tools access |
 | HTTPS (public) | `443` | All user traffic via Nginx |
 | HTTP (public) | `80` | Redirects to HTTPS |
 

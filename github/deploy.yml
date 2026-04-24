@@ -143,7 +143,7 @@ jobs:
             NEXT="standby"
             NEXT_SERVICE="odoo-standby"
             NEXT_COMPOSE="-f docker-compose.yml -f docker-compose.standby.yml"
-            NEXT_PORT=8118
+            NEXT_PORT=8418
           else
             ACTIVE="standby"
             ACTIVE_SERVICE="odoo-standby"
@@ -151,7 +151,7 @@ jobs:
             NEXT="primary"
             NEXT_SERVICE="odoo-primary"
             NEXT_COMPOSE="-f docker-compose.yml"
-            NEXT_PORT=8018
+            NEXT_PORT=8318
           fi
 
           echo "Active: $ACTIVE -> deploying to: $NEXT (port $NEXT_PORT)"
@@ -266,12 +266,12 @@ jobs:
             ROLLBACK_TO="standby"
             ROLLBACK_SERVICE="odoo-standby"
             ROLLBACK_COMPOSE="-f docker-compose.yml -f docker-compose.standby.yml"
-            ROLLBACK_PORT=8118
+            ROLLBACK_PORT=8418
           else
             ROLLBACK_TO="primary"
             ROLLBACK_SERVICE="odoo-primary"
             ROLLBACK_COMPOSE="-f docker-compose.yml"
-            ROLLBACK_PORT=8018
+            ROLLBACK_PORT=8318
           fi
 
           echo "Rolling back to: $ROLLBACK_TO (port $ROLLBACK_PORT)"
