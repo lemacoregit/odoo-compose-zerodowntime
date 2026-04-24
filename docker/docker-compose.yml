@@ -54,6 +54,9 @@ services:
     environment:
       POSTGRES_USER: '${POSTGRES_USER}'
       POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
+      # Set to 'postgres' so PostgreSQL skips auto-creating a database named
+      # after POSTGRES_USER — Odoo database is created manually via UI instead
+      POSTGRES_DB: postgres
       PGDATA: /var/lib/postgresql/data
     # Tuning for a 4-8GB RAM production server — adjust shared_buffers to ~25% of total RAM
     command:
