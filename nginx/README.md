@@ -261,9 +261,9 @@ sudo bash /opt/zerodowntime/nginx/shutdown.sh --yes --restore-default
 SSL is managed by Certbot (Let's Encrypt). Certificates are stored at:
 
 ```
-/etc/letsencrypt/live/erp.zerodowntime.com/fullchain.pem
-/etc/letsencrypt/live/erp.zerodowntime.com/privkey.pem
-/etc/letsencrypt/live/erp.zerodowntime.com/chain.pem
+/etc/letsencrypt/live/zerodowntime.lemacore.com/fullchain.pem
+/etc/letsencrypt/live/zerodowntime.lemacore.com/privkey.pem
+/etc/letsencrypt/live/zerodowntime.lemacore.com/chain.pem
 ```
 
 **First-time issuance** is handled by `setup.sh` automatically.

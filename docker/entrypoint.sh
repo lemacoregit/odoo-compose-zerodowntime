@@ -16,7 +16,7 @@ fi
 # Install Python requirements from mounted requirements.txt
 if [ -f /etc/odoo/requirements.txt ]; then
     echo "Installing Python requirements..."
-    pip install --quiet --no-cache-dir --break-system-packages -r /etc/odoo/requirements.txt
+    pip install --quiet --no-cache-dir --break-system-packages --root-user-action=ignore -r /etc/odoo/requirements.txt
 fi
 
 DB_ARGS=()

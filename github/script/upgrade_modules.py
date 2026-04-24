@@ -4,7 +4,7 @@ Odoo CI/CD - Upgrade modules via XML-RPC.
 Can be run manually or called from GitHub Actions.
 
 Usage:
-    python3 upgrade_modules.py --modules sale,purchase --url https://erp.zerodowntime.com
+    python3 upgrade_modules.py --modules sale,purchase --url https://zerodowntime.lemacore.com
 """
 
 import xmlrpc.client
@@ -167,7 +167,7 @@ def upgrade_modules(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Upgrade Odoo modules via XML-RPC")
-    parser.add_argument("--url",      default=os.getenv("ODOO_URL"),            help="Odoo URL (e.g. https://erp.zerodowntime.com)")
+    parser.add_argument("--url",      default=os.getenv("ODOO_URL"),            help="Odoo URL (e.g. https://zerodowntime.lemacore.com)")
     parser.add_argument("--db",       default=os.getenv("ODOO_DB"),             help="Database name")
     parser.add_argument("--user",     default=os.getenv("ODOO_ADMIN_USER"),     help="Admin username")
     parser.add_argument("--password", default=os.getenv("ODOO_ADMIN_PASSWORD"), help="Admin password")

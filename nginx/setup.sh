@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Initial Nginx + SSL setup for erp.zerodowntime.com
+# Initial Nginx + SSL setup for zerodowntime.lemacore.com
 # Run once on a fresh server: sudo bash nginx/setup.sh
 #
 # What it does:
@@ -16,7 +16,7 @@ set -euo pipefail
 # Constants
 # ---------------------------------------------------------------------------
 
-DOMAIN="erp.zerodowntime.com"
+DOMAIN="zerodowntime.lemacore.com"
 ADMIN_EMAIL="admin@zerodowntime.com"
 SITES_AVAILABLE="/etc/nginx/sites-available"
 SITES_ENABLED="/etc/nginx/sites-enabled"

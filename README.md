@@ -245,7 +245,7 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:8318/web/health
 
 ### Step 6 — Set Up Nginx and SSL
 
-Make sure your domain (`erp.zerodowntime.com`) already points to this server's IP via DNS **before** running this.
+Make sure your domain (`zerodowntime.lemacore.com`) already points to this server's IP via DNS **before** running this.
 
 ```bash
 cd /opt/zerodowntime
@@ -270,7 +270,7 @@ readlink /etc/nginx/sites-enabled/odoo18-zerodowntime
 # Expected: /etc/nginx/sites-available/odoo18-compose-primary
 
 # Test HTTPS
-curl -s -o /dev/null -w "%{http_code}" https://erp.zerodowntime.com/web/health
+curl -s -o /dev/null -w "%{http_code}" https://zerodowntime.lemacore.com/web/health
 # Expected: 200
 ```
 
@@ -300,7 +300,7 @@ Go to: **Repository → Settings → Secrets and variables → Actions → New r
 
 | Secret | Value |
 |---|---|
-| `ODOO_URL` | `https://erp.zerodowntime.com` |
+| `ODOO_URL` | `https://zerodowntime.lemacore.com` |
 | `ODOO_DB` | `odoo` |
 | `ODOO_ADMIN_USER` | `admin` |
 | `ODOO_ADMIN_PASSWORD` | Odoo admin password |
@@ -356,7 +356,7 @@ docker ps --filter name=odoo18-zerodowntime
 readlink /etc/nginx/sites-enabled/odoo18-zerodowntime
 
 # Test public URL
-curl -s -o /dev/null -w "%{http_code}" https://erp.zerodowntime.com/web/health
+curl -s -o /dev/null -w "%{http_code}" https://zerodowntime.lemacore.com/web/health
 # Expected: 200
 
 # Check Nginx access log
@@ -465,7 +465,7 @@ Run the script manually from any machine with network access to Odoo:
 
 ```bash
 python3 github/script/upgrade_modules.py \
-  --url https://erp.zerodowntime.com \
+  --url https://zerodowntime.lemacore.com \
   --db odoo \
   --user admin \
   --password your_password \

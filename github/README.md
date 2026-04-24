@@ -186,7 +186,7 @@ Go to **Repository → Settings → Secrets and variables → Actions → New re
 
 | Secret | Description | Example |
 |---|---|---|
-| `ODOO_URL` | Public Odoo URL (health check and XML-RPC) | `https://erp.zerodowntime.com` |
+| `ODOO_URL` | Public Odoo URL (health check and XML-RPC) | `https://zerodowntime.lemacore.com` |
 | `ODOO_DB` | Odoo database name | `odoo` |
 | `ODOO_ADMIN_USER` | Odoo admin username | `admin` |
 | `ODOO_ADMIN_PASSWORD` | Odoo admin password | `your_admin_password` |
@@ -305,7 +305,7 @@ Connects to Odoo's XML-RPC API and upgrades modules. Runs from the GitHub runner
 
 ```bash
 # Via environment variables
-export ODOO_URL=https://erp.zerodowntime.com
+export ODOO_URL=https://zerodowntime.lemacore.com
 export ODOO_DB=odoo
 export ODOO_ADMIN_USER=admin
 export ODOO_ADMIN_PASSWORD=your_password
@@ -313,7 +313,7 @@ python3 github/script/upgrade_modules.py --modules sale_customization,account_mo
 
 # Via arguments
 python3 github/script/upgrade_modules.py \
-  --url https://erp.zerodowntime.com \
+  --url https://zerodowntime.lemacore.com \
   --db odoo \
   --user admin \
   --password your_password \
