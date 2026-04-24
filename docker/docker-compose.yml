@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Shared Odoo service definition — merged into odoo-primary via YAML anchor
 x-odoo-base: &odoo-base
   image: odoo:18.0
@@ -111,9 +109,11 @@ services:
     ports:
       - "${REDIS_EXTERNAL_PORT}:6379"
     # Config file handles all settings; password injected separately to avoid storing in file
-    command: >
-      redis-server /usr/local/etc/redis/redis.conf
-      --requirepass ${ODOO_SESSION_REDIS_PASSWORD}
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+      - --requirepass
+      - "${ODOO_SESSION_REDIS_PASSWORD}"
     volumes:
       - ./etc/conf/redis.conf:/usr/local/etc/redis/redis.conf:ro
     healthcheck:
@@ -121,6 +121,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
     logging:
       driver: "json-file"
       options:
