@@ -54,7 +54,6 @@ services:
     environment:
       POSTGRES_USER: '${POSTGRES_USER}'
       POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
-      POSTGRES_DB: '${POSTGRES_DB}'
       PGDATA: /var/lib/postgresql/data
     # Tuning for a 4-8GB RAM production server — adjust shared_buffers to ~25% of total RAM
     command:
@@ -82,7 +81,7 @@ services:
     volumes:
       - ./odoo-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d postgres -h localhost -p 5432 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5

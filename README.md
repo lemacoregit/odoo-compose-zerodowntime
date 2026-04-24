@@ -196,7 +196,6 @@ Minimum required changes:
 
 ```env
 POSTGRES_PASSWORD=your_strong_password
-POSTGRES_DB=odoo
 
 ODOO_SESSION_REDIS_PASSWORD=your_redis_password
 ODOO_SESSION_REDIS_URL=redis://:your_redis_password@redis:6379/0
@@ -206,10 +205,7 @@ Then edit `etc/conf/odoo.conf` — update at minimum:
 
 ```ini
 admin_passwd = your_strong_master_password
-db_name = odoo
 ```
-
-> `db_name` must match `POSTGRES_DB` in `.env`.
 
 ---
 

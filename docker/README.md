@@ -58,7 +58,6 @@ Minimum **required** changes:
 
 ```env
 POSTGRES_PASSWORD=your_strong_password
-POSTGRES_DB=odoo
 
 ODOO_SESSION_REDIS_PASSWORD=your_redis_password
 ODOO_SESSION_REDIS_URL=redis://:your_redis_password@redis:6379/0
@@ -70,10 +69,7 @@ Edit `etc/conf/odoo.conf` — update at minimum these two values:
 
 ```ini
 admin_passwd = your_strong_master_password
-db_name = odoo
 ```
-
-> `db_name` must match `POSTGRES_DB` in `.env`.
 
 ### Step 5 — Start containers
 
@@ -277,7 +273,6 @@ cp .env.example .env
 |---|---|---|
 | `POSTGRES_USER` | PostgreSQL username | `odoo` |
 | `POSTGRES_PASSWORD` | PostgreSQL password | `your_strong_password` |
-| `POSTGRES_DB` | PostgreSQL database name | `odoo` |
 | `POSTGRES_PORT` | PostgreSQL host port | `5016` |
 | `ODOO_PRIMARY_HTTP_PORT` | Primary Odoo web host port | `8318` |
 | `ODOO_PRIMARY_LONGPOLLING_PORT` | Primary longpolling host port | `8327` |
@@ -311,9 +306,8 @@ admin_passwd = your_master_password
 ; Addons loaded in order: default (core) → extra (community) → custom (project)
 addons_path = /mnt/default-addons, /mnt/extra-addons, /mnt/custom-addons
 
-; Restrict Odoo to this database only — must match POSTGRES_DB in .env
-db_name = odoo
-dbfilter = ^odoo$
+; Restrict Odoo to this database only
+dbfilter = ^d$
 
 ; Disable database manager on login page — critical for production
 list_db = False
