@@ -15,7 +15,7 @@ upstream odoo_primary_lp {
 server {
     listen 80;
     listen [::]:80;
-    server_name zerodowntime.lemacore.com.com;
+    server_name zerodowntime.lemacore.com;
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
@@ -29,11 +29,11 @@ server {
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name zerodowntime.lemacore.com.com;
+    server_name zerodowntime.lemacore.com;
 
     # TLS certificate (Certbot / Let's Encrypt)
-    ssl_certificate     /etc/letsencrypt/live/zerodowntime.lemacore.com.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/zerodowntime.lemacore.com.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/zerodowntime.lemacore.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/zerodowntime.lemacore.com/privkey.pem;
 
     # Modern TLS — no TLS 1.0/1.1, strong cipher suites only
     ssl_protocols             TLSv1.2 TLSv1.3;
@@ -46,7 +46,7 @@ server {
     # OCSP stapling — reduces TLS handshake latency
     ssl_stapling            on;
     ssl_stapling_verify     on;
-    ssl_trusted_certificate /etc/letsencrypt/live/zerodowntime.lemacore.com.com/chain.pem;
+    ssl_trusted_certificate /etc/letsencrypt/live/zerodowntime.lemacore.com/chain.pem;
     resolver                8.8.8.8 8.8.4.4 valid=300s;
     resolver_timeout        5s;
 
