@@ -54,6 +54,7 @@ services:
     environment:
       POSTGRES_USER: '${POSTGRES_USER}'
       POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
+      POSTGRES_DB: '${POSTGRES_DB}'
       PGDATA: /var/lib/postgresql/data
     # Tuning for a 4-8GB RAM production server — adjust shared_buffers to ~25% of total RAM
     command:
@@ -81,7 +82,7 @@ services:
     volumes:
       - ./odoo-postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d postgres -h localhost -p 5432 || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -150,13 +151,11 @@ services:
       - "${ODOO_PRIMARY_HTTP_PORT}:8069"
       - "${ODOO_PRIMARY_LONGPOLLING_PORT}:8072"
     healthcheck:
-      # Accepts 2xx and 3xx — works before DB is initialized (shows DB manager)
-      # and after DB is initialized (redirects to login or returns 200)
-      test: ["CMD-SHELL", "curl -sf --max-time 8 http://localhost:8069/ > /dev/null"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8069/web/health || exit 1"]
       interval: 15s
       timeout: 10s
-      retries: 8
-      start_period: 90s
+      retries: 6
+      start_period: 30s
     deploy:
       resources:
         limits:
